@@ -1,6 +1,6 @@
 import { defineBackend } from "@aws-amplify/backend";
 import { Effect, PolicyStatement } from "aws-cdk-lib/aws-iam";
-import { CfnOutput } from "aws-cdk-lib";
+import { CfnOutput, Stack } from "aws-cdk-lib";
 import { FunctionUrlAuthType } from "aws-cdk-lib/aws-lambda";
 import { auth } from "./auth/resource";
 import { postConfirmation } from "./auth/post-confirmation/resource";
@@ -11,6 +11,7 @@ import { projectInvitation } from "./functions/project-invitation/resource";
 import { projectDiagramSync } from "./functions/project-diagram-sync/resource";
 import { billingManager } from "./functions/billing-manager/resource";
 import { lemonSqueezyWebhook } from "./functions/lemon-squeezy-webhook/resource";
+import { analysisOrchestrator } from "./functions/analysis-orchestrator/resource";
 
 export const backend = defineBackend({
   auth,
@@ -22,6 +23,7 @@ export const backend = defineBackend({
   projectDiagramSync,
   billingManager,
   lemonSqueezyWebhook,
+  analysisOrchestrator,
 });
 
 backend.projectInvitation.resources.lambda.addToRolePolicy(
@@ -41,4 +43,28 @@ new CfnOutput(
   backend.lemonSqueezyWebhook.resources.lambda.stack,
   "LemonSqueezyWebhookUrl",
   { value: billingWebhookUrl.url },
+);
+
+const analysisStack = Stack.of(
+  backend.analysisOrchestrator.resources.lambda,
+);
+
+backend.analysisOrchestrator.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: ["ssm:GetParameter"],
+    resources: [
+      `arn:${analysisStack.partition}:ssm:${analysisStack.region}:${analysisStack.account}:parameter/gestion-diagrams/*/analysis/power-flow-worker-arn`,
+    ],
+  }),
+);
+
+backend.analysisOrchestrator.resources.lambda.addToRolePolicy(
+  new PolicyStatement({
+    effect: Effect.ALLOW,
+    actions: ["lambda:InvokeFunction"],
+    resources: [
+      `arn:${analysisStack.partition}:lambda:${analysisStack.region}:${analysisStack.account}:function:gestion-power-flow-solver-*-power-flow-worker`,
+    ],
+  }),
 );

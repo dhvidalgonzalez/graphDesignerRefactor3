@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { createAnalysisInputPreview, createAnalysisRequestPreview } from "../../domain/analysis/createAnalysisInput.js";
 import { evaluateAnalysisReadiness } from "../../domain/analysis/analysisReadiness.js";
 import { normalizeAnalysisConfiguration } from "../../domain/analysis/analysisConfiguration.js";
@@ -6,6 +6,13 @@ import { getOperatingCase, normalizeOperatingCases } from "../../domain/analysis
 import { useEditorActions, useEditorSelector } from "../../editor/EditorContext.jsx";
 import { useWorkspace } from "../../workspace/WorkspaceContext.jsx";
 import { downloadTextFile, safeFilename } from "../../utils/download.js";
+import {
+  createAnalysisClientRequestId,
+  getAnalysisStudyService,
+  listAnalysisStudiesByDiagramService,
+  loadAnalysisArtifactTextService,
+  startAnalysisService,
+} from "../../services/analysis/index.js";
 
 const READINESS_LABELS = {
   NOT_READY: "No preparado",
@@ -91,7 +98,7 @@ function OverviewTab({ document, validation, activeDiagram }) {
           <span>Unidades</span><strong>1 unidad estándar</strong>
         </div>
         <p className="analysis-phase-note">
-          Esta fase sólo prepara y valida los datos. No crea estudios ni consume unidades; la Lambda orquestadora se incorporará en la segunda fase.
+          El modelo puede guardarse y enviarse al solver desde la pestaña Ejecutar. Los resultados se muestran inicialmente como JSON crudo.
         </p>
       </section>
       <IssueList title="Errores bloqueantes" items={validation.errors} tone="error" />
@@ -398,22 +405,339 @@ function ModelTab({ document, validation, activeDiagram }) {
   );
 }
 
+
+const TERMINAL_ANALYSIS_STATUSES = new Set([
+  "CONVERGED",
+  "NOT_CONVERGED",
+  "FAILED",
+  "TIMED_OUT",
+  "CANCELLED",
+]);
+
+const ANALYSIS_STATUS_LABELS = {
+  VALIDATING: "Validando",
+  QUEUED: "En cola",
+  STARTING: "Iniciando",
+  RUNNING: "Ejecutando",
+  CONVERGED: "Convergió",
+  NOT_CONVERGED: "No convergió",
+  FAILED: "Falló",
+  TIMED_OUT: "Tiempo agotado",
+  CANCELLED: "Cancelado",
+};
+
+function formatStudyDate(value) {
+  if (!value) return "—";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? String(value) : date.toLocaleString("es-CL");
+}
+
+function statusTone(status) {
+  if (status === "CONVERGED") return "success";
+  if (status === "NOT_CONVERGED") return "warning";
+  if (["FAILED", "TIMED_OUT", "CANCELLED"].includes(status)) return "error";
+  return "progress";
+}
+
+function ExecutionTab({
+  document,
+  validation,
+  configuration,
+  activeProject,
+  activeDiagram,
+  editorActions,
+  workspaceActions,
+}) {
+  const cases = normalizeOperatingCases(document.operatingCases);
+  const defaultCase = cases.find((item) => item.isDefault) ?? cases[0];
+  const defaultPreference = configuration.defaultExecutionPreference === "ADVANCED"
+    ? "AUTO"
+    : configuration.defaultExecutionPreference;
+  const [selectedCaseId, setSelectedCaseId] = useState(defaultCase.id);
+  const [executionPreference, setExecutionPreference] = useState(defaultPreference);
+  const [studyName, setStudyName] = useState("");
+  const [currentStudy, setCurrentStudy] = useState(null);
+  const [history, setHistory] = useState([]);
+  const [artifactType, setArtifactType] = useState("STUDY");
+  const [artifactText, setArtifactText] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!cases.some((item) => item.id === selectedCaseId)) {
+      setSelectedCaseId(defaultCase.id);
+    }
+  }, [cases, defaultCase.id, selectedCaseId]);
+
+  const refreshHistory = useCallback(async () => {
+    if (!activeDiagram?.id) return [];
+    setHistoryLoading(true);
+    try {
+      const studies = await listAnalysisStudiesByDiagramService(activeDiagram.id);
+      setHistory(studies);
+      return studies;
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+      return [];
+    } finally {
+      setHistoryLoading(false);
+    }
+  }, [activeDiagram?.id]);
+
+  useEffect(() => {
+    setCurrentStudy(null);
+    setArtifactType("STUDY");
+    setArtifactText("");
+    setMessage("");
+    setError("");
+    refreshHistory();
+  }, [activeDiagram?.id, refreshHistory]);
+
+  const showStudy = useCallback((study) => {
+    setCurrentStudy(study);
+    setArtifactType("STUDY");
+    setArtifactText(JSON.stringify(study, null, 2));
+    setError("");
+  }, []);
+
+  const loadArtifact = useCallback(async (study, type) => {
+    if (!study?.id) return;
+    setBusy(true);
+    setError("");
+    try {
+      const loaded = await loadAnalysisArtifactTextService(study.id, type);
+      setArtifactType(type);
+      setArtifactText(loaded.text);
+      setMessage(`${type.toLowerCase()} descargado desde S3.`);
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    const studyId = currentStudy?.id;
+    const status = currentStudy?.status;
+    if (!studyId || TERMINAL_ANALYSIS_STATUSES.has(status)) return undefined;
+
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const updated = await getAnalysisStudyService(studyId);
+        if (cancelled || !updated) return;
+        setCurrentStudy(updated);
+        setArtifactType("STUDY");
+        setArtifactText(JSON.stringify(updated, null, 2));
+        if (TERMINAL_ANALYSIS_STATUSES.has(updated.status)) {
+          setMessage(`El estudio terminó con estado ${updated.status}.`);
+          await refreshHistory();
+          if (["CONVERGED", "NOT_CONVERGED"].includes(updated.status) && updated.resultStorageKey) {
+            await loadArtifact(updated, "RESULT");
+          } else if (updated.diagnosticsStorageKey) {
+            await loadArtifact(updated, "DIAGNOSTICS");
+          }
+        }
+      } catch (nextError) {
+        if (!cancelled) {
+          setError(nextError instanceof Error ? nextError.message : String(nextError));
+        }
+      }
+    };
+
+    const timer = window.setInterval(poll, 2500);
+    poll();
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [currentStudy?.id, currentStudy?.status, loadArtifact, refreshHistory]);
+
+  const runAnalysis = async () => {
+    if (!activeProject?.id || !activeDiagram?.id) return;
+    setBusy(true);
+    setError("");
+    setMessage("Guardando la versión actual del diagrama…");
+    try {
+      editorActions.setPersistence("saving", "Guardando antes del análisis");
+      const saved = await workspaceActions.saveDiagramDocument(
+        activeProject.id,
+        activeDiagram.id,
+        document,
+      );
+      editorActions.setPersistence("saved", "Guardado en la nube");
+      setMessage("Creando el estudio y enviándolo al solver…");
+
+      const request = await startAnalysisService({
+        diagramId: activeDiagram.id,
+        operatingCaseId: selectedCaseId,
+        analysisType: "POWER_FLOW",
+        executionPreference,
+        expectedDiagramVersion: Number(saved.storageVersion),
+        clientRequestId: createAnalysisClientRequestId(),
+        name: studyName.trim() || undefined,
+      });
+      const study = await getAnalysisStudyService(request.studyId);
+      if (study) showStudy(study);
+      setMessage(request.message || "Estudio enviado al solver.");
+      await refreshHistory();
+    } catch (nextError) {
+      editorActions.setPersistence("error", "No se pudo iniciar el análisis");
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectedCase = getOperatingCase(document, selectedCaseId);
+  const canRun = Boolean(
+    activeProject?.canEdit &&
+    activeDiagram?.id &&
+    validation.readiness !== "NOT_READY" &&
+    !busy,
+  );
+  const status = currentStudy?.status;
+  const isTerminal = Boolean(status && TERMINAL_ANALYSIS_STATUSES.has(status));
+
+  return (
+    <div className="analysis-tab-content">
+      <AnalysisSummary validation={validation} />
+
+      <section className="analysis-section-card analysis-run-card">
+        <h3>Ejecutar flujo de carga</h3>
+        <label className="property-field">
+          <span>Nombre del estudio</span>
+          <input
+            value={studyName}
+            onChange={(event) => setStudyName(event.target.value)}
+            placeholder={`Flujo de carga · ${document.name}`}
+          />
+        </label>
+        <label className="property-field">
+          <span>Caso de operación</span>
+          <select value={selectedCase.id} onChange={(event) => setSelectedCaseId(event.target.value)}>
+            {cases.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+          </select>
+        </label>
+        <label className="property-field">
+          <span>Modo de ejecución</span>
+          <select value={executionPreference} onChange={(event) => setExecutionPreference(event.target.value)}>
+            <option value="AUTO">Automática</option>
+            <option value="STANDARD">Estándar · Lambda</option>
+          </select>
+        </label>
+        <div className="read-only-grid analysis-run-summary">
+          <span>Análisis</span><strong>POWER_FLOW</strong>
+          <span>Algoritmo</span><strong>{configuration.solverOptions.algorithm}</strong>
+          <span>Versión actual</span><strong>{activeDiagram?.storageVersion ?? 0}</strong>
+          <span>Unidades reservadas</span><strong>1</strong>
+        </div>
+        <button className="button button--primary analysis-run-button" type="button" disabled={!canRun} onClick={runAnalysis}>
+          {busy ? "Procesando…" : "Guardar y ejecutar análisis"}
+        </button>
+        {!activeProject?.canEdit && <p className="analysis-phase-note">Se necesita permiso de edición para ejecutar estudios.</p>}
+        {validation.readiness === "NOT_READY" && <p className="analysis-phase-note analysis-phase-note--error">Corrige los errores bloqueantes antes de ejecutar.</p>}
+      </section>
+
+      {(message || error) && (
+        <section className={`analysis-operation-message ${error ? "analysis-operation-message--error" : ""}`}>
+          {error || message}
+        </section>
+      )}
+
+      {currentStudy && (
+        <section className="analysis-section-card">
+          <div className="analysis-study-heading">
+            <div>
+              <h3>Estudio actual</h3>
+              <code>{currentStudy.id}</code>
+            </div>
+            <span className={`analysis-status analysis-status--${statusTone(currentStudy.status)}`}>
+              {ANALYSIS_STATUS_LABELS[currentStudy.status] ?? currentStudy.status}
+            </span>
+          </div>
+          <div className="read-only-grid">
+            <span>Solicitado</span><strong>{formatStudyDate(currentStudy.requestedAt)}</strong>
+            <span>Inicio</span><strong>{formatStudyDate(currentStudy.startedAt)}</strong>
+            <span>Término</span><strong>{formatStudyDate(currentStudy.completedAt)}</strong>
+            <span>Motor</span><strong>{currentStudy.engineName || "Pendiente"} {currentStudy.engineVersion || ""}</strong>
+            <span>Fallo</span><strong>{currentStudy.failureCode || "—"}</strong>
+          </div>
+          {currentStudy.failureMessage && (
+            <p className="analysis-study-failure">{currentStudy.failureMessage}</p>
+          )}
+          <div className="analysis-toolbar-row analysis-artifact-actions">
+            <button className="button button--soft" type="button" onClick={() => showStudy(currentStudy)}>Registro</button>
+            <button className="button button--soft" type="button" disabled={!currentStudy.inputStorageKey || busy} onClick={() => loadArtifact(currentStudy, "INPUT")}>Input</button>
+            <button className="button button--soft" type="button" disabled={!isTerminal || !currentStudy.resultStorageKey || busy} onClick={() => loadArtifact(currentStudy, "RESULT")}>Resultado</button>
+            <button className="button button--soft" type="button" disabled={!isTerminal || !currentStudy.diagnosticsStorageKey || busy} onClick={() => loadArtifact(currentStudy, "DIAGNOSTICS")}>Diagnóstico</button>
+          </div>
+        </section>
+      )}
+
+      {artifactText && (
+        <section className="analysis-section-card analysis-raw-result">
+          <div className="analysis-raw-result-header">
+            <h3>Contenido crudo · {artifactType}</h3>
+            <button
+              className="button button--soft"
+              type="button"
+              onClick={() => downloadTextFile(
+                `${safeFilename(document.name)}-${currentStudy?.id || "analysis"}-${artifactType.toLowerCase()}.json`,
+                artifactText,
+              )}
+            >
+              Descargar
+            </button>
+          </div>
+          <pre className="analysis-code-preview analysis-code-preview--result">{artifactText}</pre>
+        </section>
+      )}
+
+      <section className="analysis-section-card">
+        <div className="analysis-history-heading">
+          <h3>Estudios recientes</h3>
+          <button className="mini-button" type="button" disabled={historyLoading} onClick={refreshHistory} title="Actualizar historial">↻</button>
+        </div>
+        <div className="analysis-study-list">
+          {history.map((study) => (
+            <button key={study.id} type="button" className={currentStudy?.id === study.id ? "active" : ""} onClick={() => showStudy(study)}>
+              <span className={`analysis-status analysis-status--${statusTone(study.status)}`}>{ANALYSIS_STATUS_LABELS[study.status] ?? study.status}</span>
+              <strong>{study.name || "Flujo de carga"}</strong>
+              <small>{formatStudyDate(study.requestedAt)}</small>
+            </button>
+          ))}
+          {!historyLoading && !history.length && <p>No existen estudios para este diagrama.</p>}
+          {historyLoading && <p>Cargando historial…</p>}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export default function AnalysisPanel() {
   const document = useEditorSelector((state) => state.document);
-  const actions = useEditorActions();
-  const { activeProject, activeDiagram } = useWorkspace();
-  const [tab, setTab] = useState("overview");
+  const editorActions = useEditorActions();
+  const {
+    activeProject,
+    activeDiagram,
+    actions: workspaceActions,
+  } = useWorkspace();
+  const [tab, setTab] = useState("execute");
   const validation = useMemo(() => evaluateAnalysisReadiness(document), [document]);
   const configuration = normalizeAnalysisConfiguration(document.analysisConfiguration);
 
   return (
     <aside className="properties-panel analysis-panel">
       <div className="panel-header analysis-panel-header">
-        <div><span className="eyebrow">Preparación de datos</span><h2>Análisis eléctricos</h2></div>
-        <button className="mini-button" type="button" onClick={actions.closeAnalysisPanel} title="Volver a propiedades">×</button>
+        <div><span className="eyebrow">Ejecución y datos</span><h2>Análisis eléctricos</h2></div>
+        <button className="mini-button" type="button" onClick={editorActions.closeAnalysisPanel} title="Volver a propiedades">×</button>
       </div>
       <div className="analysis-tabs" role="tablist">
         {[
+          ["execute", "Ejecutar"],
           ["overview", "Preparación"],
           ["cases", "Casos"],
           ["configuration", "Solver"],
@@ -422,9 +746,20 @@ export default function AnalysisPanel() {
           <button key={id} type="button" className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>
         ))}
       </div>
+      {tab === "execute" && (
+        <ExecutionTab
+          document={document}
+          validation={validation}
+          configuration={configuration}
+          activeProject={activeProject}
+          activeDiagram={activeDiagram}
+          editorActions={editorActions}
+          workspaceActions={workspaceActions}
+        />
+      )}
       {tab === "overview" && <OverviewTab document={document} validation={validation} activeDiagram={activeDiagram} />}
-      {tab === "cases" && <CasesTab document={document} validation={validation} actions={actions} canEdit={Boolean(activeProject?.canEdit)} />}
-      {tab === "configuration" && <ConfigurationTab configuration={configuration} actions={actions} canEdit={Boolean(activeProject?.canEdit)} />}
+      {tab === "cases" && <CasesTab document={document} validation={validation} actions={editorActions} canEdit={Boolean(activeProject?.canEdit)} />}
+      {tab === "configuration" && <ConfigurationTab configuration={configuration} actions={editorActions} canEdit={Boolean(activeProject?.canEdit)} />}
       {tab === "model" && <ModelTab document={document} validation={validation} activeDiagram={activeDiagram} />}
     </aside>
   );

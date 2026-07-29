@@ -5,6 +5,7 @@ import { projectInvitation } from "../functions/project-invitation/resource";
 import { projectDiagramSync } from "../functions/project-diagram-sync/resource";
 import { billingManager } from "../functions/billing-manager/resource";
 import { lemonSqueezyWebhook } from "../functions/lemon-squeezy-webhook/resource";
+import { analysisOrchestrator } from "../functions/analysis-orchestrator/resource";
 
 const schema = a
   .schema({
@@ -432,6 +433,26 @@ const schema = a
       sendCount: a.integer().required(),
     }),
 
+    AnalysisRequestResult: a.customType({
+      studyId: a.id().required(),
+      status: a.ref("AnalysisStatus").required(),
+      message: a.string(),
+      inputStorageKey: a.string(),
+      resultStorageKey: a.string(),
+      diagnosticsStorageKey: a.string(),
+    }),
+
+    AnalysisArtifactTicket: a.customType({
+      studyId: a.id().required(),
+      artifactType: a.string().required(),
+      status: a.ref("AnalysisStatus").required(),
+      url: a.string().required(),
+      key: a.string().required(),
+      method: a.string().required(),
+      expiresAt: a.datetime().required(),
+      contentType: a.string().required(),
+    }),
+
     getBillingOverview: a
       .query()
       .arguments({ workspaceId: a.id().required() })
@@ -550,6 +571,31 @@ const schema = a
       .returns(a.boolean())
       .handler(a.handler.function(projectDiagramSync))
       .authorization((allow) => [allow.authenticated()]),
+
+    startAnalysis: a
+      .mutation()
+      .arguments({
+        diagramId: a.id().required(),
+        operatingCaseId: a.string().required(),
+        analysisType: a.ref("AnalysisType"),
+        executionPreference: a.ref("ExecutionPreference"),
+        expectedDiagramVersion: a.integer().required(),
+        clientRequestId: a.string().required(),
+        name: a.string(),
+      })
+      .returns(a.ref("AnalysisRequestResult"))
+      .handler(a.handler.function(analysisOrchestrator))
+      .authorization((allow) => [allow.authenticated()]),
+
+    requestAnalysisArtifact: a
+      .query()
+      .arguments({
+        studyId: a.id().required(),
+        artifactType: a.string().required(),
+      })
+      .returns(a.ref("AnalysisArtifactTicket"))
+      .handler(a.handler.function(analysisOrchestrator))
+      .authorization((allow) => [allow.authenticated()]),
   })
   .authorization((allow) => [
     allow.resource(postConfirmation).to(["query", "mutate"]),
@@ -558,6 +604,7 @@ const schema = a
     allow.resource(projectDiagramSync).to(["query", "mutate"]),
     allow.resource(billingManager).to(["query", "mutate"]),
     allow.resource(lemonSqueezyWebhook).to(["query", "mutate"]),
+    allow.resource(analysisOrchestrator).to(["query", "mutate"]),
   ]);
 
 export type Schema = ClientSchema<typeof schema>;

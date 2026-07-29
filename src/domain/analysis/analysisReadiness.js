@@ -234,11 +234,23 @@ export function evaluateAnalysisReadiness(document) {
     }
 
     if (component.kind === "TRANSFORMER_3W") {
-      warnings.push(issue(
-        "THREE_WINDING_ADAPTER_PENDING",
-        "El transformador de tres devanados queda modelado, pero el adaptador del solver deberá implementarse en la fase serverless.",
+      errors.push(issue(
+        "THREE_WINDING_TRANSFORMER_NOT_SUPPORTED",
+        "El solver desplegado todavía no admite transformadores de tres devanados.",
         component.id,
       ));
+    }
+
+    if (component.kind === "SHUNT") {
+      const controlMode = String(parameterValue(component, "controlMode") ?? "Fijo").toUpperCase();
+      if (!["FIJO", "FIXED"].includes(controlMode)) {
+        errors.push(issue(
+          "SHUNT_CONTROL_MODE_NOT_SUPPORTED",
+          "El solver actual sólo admite bancos shunt con control fijo.",
+          component.id,
+          "controlMode",
+        ));
+      }
     }
 
     if (component.kind === "GENERATOR" || component.kind === "EXTERNAL_GRID") {
