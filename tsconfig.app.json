@@ -1,0 +1,10 @@
+{
+  "include": [
+    "amplify/data/resource.ts",
+    "amplify/functions/diagram-file-access/resource.ts",
+    "amplify/functions/project-diagram-sync/resource.ts",
+    "amplify/functions/project-invitation/resource.ts",
+    "amplify/functions/billing-manager/resource.ts",
+    "amplify/functions/lemon-squeezy-webhook/resource.ts"
+  ]
+}

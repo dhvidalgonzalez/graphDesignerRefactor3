@@ -1,0 +1,47 @@
+{
+  "name": "graph-designer-amplify",
+  "private": true,
+  "version": "6.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint .",
+    "test": "vitest run",
+    "sandbox": "ampx sandbox",
+    "sandbox:delete": "ampx sandbox delete",
+    "generate:outputs": "ampx generate outputs"
+  },
+  "dependencies": {
+    "@aws-amplify/ui-react": "^6.9.4",
+    "@aws-sdk/client-s3": "^3.1096.0",
+    "@aws-sdk/client-sesv2": "^3.1097.0",
+    "@aws-sdk/s3-request-presigner": "^3.1096.0",
+    "aws-amplify": "^6.19.0",
+    "konva": "9.3.20",
+    "react": "18.3.1",
+    "react-dom": "18.3.1",
+    "react-konva": "18.2.10"
+  },
+  "devDependencies": {
+    "@aws-amplify/backend": "^1.23.0",
+    "@aws-amplify/backend-cli": "^1.8.3",
+    "@eslint/js": "9.17.0",
+    "@types/aws-lambda": "^8.10.162",
+    "@types/node": "^22.20.1",
+    "@vitejs/plugin-react": "4.3.4",
+    "aws-cdk-lib": "^2.244.0",
+    "constructs": "^10.7.1",
+    "esbuild": "^0.28.1",
+    "eslint": "9.17.0",
+    "eslint-plugin-react-hooks": "5.0.0",
+    "eslint-plugin-react-refresh": "0.4.16",
+    "globals": "15.14.0",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.3",
+    "vite": "6.0.5",
+    "vitest": "2.1.8"
+  },
+  "description": "Editor de diagramas eléctricos con Amplify Gen 2 y preparación de datos para análisis eléctricos."
+}
