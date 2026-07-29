@@ -13,6 +13,7 @@ import GridLayer from "./GridLayer.jsx";
 import NodeView from "./NodeView.jsx";
 import EdgeView from "./EdgeView.jsx";
 import ConnectionPreview from "./ConnectionPreview.jsx";
+import AnalysisOverlayLayer from "./AnalysisOverlayLayer.jsx";
 
 const DRAW_TOOLS = new Set(["path", "line"]);
 
@@ -64,6 +65,7 @@ export default function DiagramCanvas() {
       viewport: state.viewport,
       tool: state.tool,
       draft: state.connectionDraft,
+      analysisOverlay: state.ui.analysisOverlay,
     }),
     shallowEqual,
   );
@@ -248,6 +250,7 @@ export default function DiagramCanvas() {
           {edgeIds.map((edgeId) => <EdgeView key={edgeId} edgeId={edgeId} />)}
           {nodeIds.map((nodeId) => <NodeView key={nodeId} nodeId={nodeId} />)}
           <ConnectionPreview />
+          <AnalysisOverlayLayer />
           {selectionRect && (
             <Rect
               x={selectionRect.x}
@@ -263,6 +266,22 @@ export default function DiagramCanvas() {
           )}
         </Layer>
       </Stage>
+      {data.analysisOverlay?.result && (
+        <div className="analysis-canvas-badge">
+          <div>
+            <span>Estudio activo</span>
+            <strong>{data.analysisOverlay.study?.name || "Flujo de carga"}</strong>
+            <small>{data.analysisOverlay.result.operatingCaseId || data.analysisOverlay.study?.operatingCaseId || "Caso de operación"}</small>
+          </div>
+          <button
+            type="button"
+            onClick={() => actions.updateAnalysisOverlayOptions({ visible: !data.analysisOverlay.options?.visible })}
+          >
+            {data.analysisOverlay.options?.visible ? "Ocultar" : "Mostrar"}
+          </button>
+          <button type="button" className="danger" onClick={actions.clearActiveAnalysisResult}>×</button>
+        </div>
+      )}
     </div>
   );
 }

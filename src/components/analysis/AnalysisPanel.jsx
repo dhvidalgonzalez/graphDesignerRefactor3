@@ -3,7 +3,17 @@ import { createAnalysisInputPreview, createAnalysisRequestPreview } from "../../
 import { evaluateAnalysisReadiness } from "../../domain/analysis/analysisReadiness.js";
 import { normalizeAnalysisConfiguration } from "../../domain/analysis/analysisConfiguration.js";
 import { getOperatingCase, normalizeOperatingCases } from "../../domain/analysis/operatingCases.js";
-import { useEditorActions, useEditorSelector } from "../../editor/EditorContext.jsx";
+import {
+  createAnalysisResultIndex,
+  formatCurrentA,
+  formatPowerKw,
+  formatReactivePowerKvar,
+  formatResultNumber,
+  parseAnalysisResultText,
+  voltagePuColor,
+  loadingColor,
+} from "../../domain/analysis/analysisResults.js";
+import { shallowEqual, useEditorActions, useEditorSelector } from "../../editor/EditorContext.jsx";
 import { useWorkspace } from "../../workspace/WorkspaceContext.jsx";
 import { downloadTextFile, safeFilename } from "../../utils/download.js";
 import {
@@ -98,7 +108,7 @@ function OverviewTab({ document, validation, activeDiagram }) {
           <span>Unidades</span><strong>1 unidad estándar</strong>
         </div>
         <p className="analysis-phase-note">
-          El modelo puede guardarse y enviarse al solver desde la pestaña Ejecutar. Los resultados se muestran inicialmente como JSON crudo.
+          El modelo puede guardarse y enviarse al solver desde la pestaña Ejecutar. Un resultado convergente puede activarse como capa visual, revisarse en tablas y consultarse dentro de cada componente.
         </p>
       </section>
       <IssueList title="Errores bloqueantes" items={validation.errors} tone="error" />
@@ -502,21 +512,36 @@ function ExecutionTab({
     setError("");
   }, []);
 
-  const loadArtifact = useCallback(async (study, type) => {
-    if (!study?.id) return;
+  const loadArtifact = useCallback(async (study, type, { activate = false } = {}) => {
+    if (!study?.id) return null;
     setBusy(true);
     setError("");
     try {
       const loaded = await loadAnalysisArtifactTextService(study.id, type);
       setArtifactType(type);
       setArtifactText(loaded.text);
+      if (type === "RESULT") {
+        const parsed = parseAnalysisResultText(loaded.text);
+        if (parsed.diagramId !== activeDiagram?.id) {
+          throw new Error("El resultado pertenece a otro diagrama y no puede activarse en esta vista.");
+        }
+        if (activate) {
+          editorActions.activateAnalysisResult(study, parsed);
+          setMessage("Resultado activo sobre el diagrama.");
+        } else {
+          setMessage("result.json descargado desde S3.");
+        }
+        return parsed;
+      }
       setMessage(`${type.toLowerCase()} descargado desde S3.`);
+      return loaded.text;
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
+      return null;
     } finally {
       setBusy(false);
     }
-  }, []);
+  }, [activeDiagram?.id, editorActions]);
 
   useEffect(() => {
     const studyId = currentStudy?.id;
@@ -535,7 +560,7 @@ function ExecutionTab({
           setMessage(`El estudio terminó con estado ${updated.status}.`);
           await refreshHistory();
           if (["CONVERGED", "NOT_CONVERGED"].includes(updated.status) && updated.resultStorageKey) {
-            await loadArtifact(updated, "RESULT");
+            await loadArtifact(updated, "RESULT", { activate: true });
           } else if (updated.diagnosticsStorageKey) {
             await loadArtifact(updated, "DIAGNOSTICS");
           }
@@ -672,6 +697,7 @@ function ExecutionTab({
             <button className="button button--soft" type="button" onClick={() => showStudy(currentStudy)}>Registro</button>
             <button className="button button--soft" type="button" disabled={!currentStudy.inputStorageKey || busy} onClick={() => loadArtifact(currentStudy, "INPUT")}>Input</button>
             <button className="button button--soft" type="button" disabled={!isTerminal || !currentStudy.resultStorageKey || busy} onClick={() => loadArtifact(currentStudy, "RESULT")}>Resultado</button>
+            <button className="button button--primary" type="button" disabled={!isTerminal || !currentStudy.resultStorageKey || busy} onClick={() => loadArtifact(currentStudy, "RESULT", { activate: true })}>Activar en diagrama</button>
             <button className="button button--soft" type="button" disabled={!isTerminal || !currentStudy.diagnosticsStorageKey || busy} onClick={() => loadArtifact(currentStudy, "DIAGNOSTICS")}>Diagnóstico</button>
           </div>
         </section>
@@ -703,11 +729,26 @@ function ExecutionTab({
         </div>
         <div className="analysis-study-list">
           {history.map((study) => (
-            <button key={study.id} type="button" className={currentStudy?.id === study.id ? "active" : ""} onClick={() => showStudy(study)}>
-              <span className={`analysis-status analysis-status--${statusTone(study.status)}`}>{ANALYSIS_STATUS_LABELS[study.status] ?? study.status}</span>
-              <strong>{study.name || "Flujo de carga"}</strong>
-              <small>{formatStudyDate(study.requestedAt)}</small>
-            </button>
+            <div key={study.id} className={currentStudy?.id === study.id ? "active" : ""}>
+              <button type="button" className="analysis-study-main" onClick={() => showStudy(study)}>
+                <span className={`analysis-status analysis-status--${statusTone(study.status)}`}>{ANALYSIS_STATUS_LABELS[study.status] ?? study.status}</span>
+                <strong>{study.name || "Flujo de carga"}</strong>
+                <small>{formatStudyDate(study.requestedAt)}</small>
+              </button>
+              {study.resultStorageKey && ["CONVERGED", "NOT_CONVERGED"].includes(study.status) && (
+                <button
+                  className="analysis-study-activate"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    showStudy(study);
+                    loadArtifact(study, "RESULT", { activate: true });
+                  }}
+                >
+                  Mostrar
+                </button>
+              )}
+            </div>
           ))}
           {!historyLoading && !history.length && <p>No existen estudios para este diagrama.</p>}
           {historyLoading && <p>Cargando historial…</p>}
@@ -717,8 +758,222 @@ function ExecutionTab({
   );
 }
 
+function OverlayOption({ checked, label, onChange }) {
+  return (
+    <label className="analysis-overlay-option">
+      <input type="checkbox" checked={Boolean(checked)} onChange={(event) => onChange(event.target.checked)} />
+      <span>{label}</span>
+    </label>
+  );
+}
+
+function ResultTable({ columns, rows, emptyMessage }) {
+  if (!rows.length) return <p className="analysis-empty-result">{emptyMessage}</p>;
+  return (
+    <div className="analysis-results-table-wrap">
+      <table className="analysis-results-table">
+        <thead>
+          <tr>{columns.map((column) => <th key={column.key}>{column.label}</th>)}</tr>
+        </thead>
+        <tbody>
+          {rows.map((row, rowIndex) => (
+            <tr key={row.componentId || row.connectionNodeId || row.busId || `${row.code}-${rowIndex}`}>
+              {columns.map((column) => <td key={column.key}>{column.render ? column.render(row) : row[column.key] ?? "—"}</td>)}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+const RESULT_CATEGORIES = [
+  ["buses", "Barras"],
+  ["branches", "Líneas"],
+  ["transformers", "Transformadores"],
+  ["generators", "Generadores"],
+  ["loads", "Cargas"],
+  ["warnings", "Advertencias"],
+];
+
+function ResultsTab({ overlay, actions, activeDiagram, document }) {
+  const [category, setCategory] = useState("buses");
+  const result = overlay?.result;
+  const options = overlay?.options ?? {};
+  const resultIndex = useMemo(
+    () => (result && document ? createAnalysisResultIndex(document, result) : null),
+    [document, result],
+  );
+  if (!result) {
+    return (
+      <div className="analysis-tab-content">
+        <section className="analysis-section-card analysis-empty-active-study">
+          <h3>No hay un estudio activo</h3>
+          <p>Abre la pestaña Ejecutar y activa el resultado de un estudio convergente. Los resultados se descargarán desde S3 y se montarán sobre este mismo diagrama.</p>
+        </section>
+      </div>
+    );
+  }
+
+  const summary = result.summary ?? {};
+  const rows = Array.isArray(result[category]) ? result[category] : [];
+  const componentLabel = (componentId) => {
+    const entity = document?.nodes?.[componentId] ?? document?.edges?.[componentId];
+    return entity?.properties?.name ? `${entity.properties.name} · ${componentId}` : componentId || "—";
+  };
+  const busLabel = (row) => {
+    const connectionNode = resultIndex?.connectionNodeById.get(row.connectionNodeId)
+      ?? resultIndex?.connectionNodeById.get(row.busId)
+      ?? resultIndex?.connectionNodeByBusComponentId.get(row.busId);
+    const visualNodeId = connectionNode?.busComponentId || (document?.nodes?.[row.busId] ? row.busId : null);
+    const visualNode = visualNodeId ? document?.nodes?.[visualNodeId] : null;
+    return visualNode?.properties?.name
+      ? `${visualNode.properties.name} · ${row.busId}`
+      : row.busId || row.connectionNodeId || "—";
+  };
+  const resultVersion = Number(result.diagramStorageVersion ?? overlay.study?.inputDiagramVersion);
+  const currentVersion = Number(activeDiagram?.storageVersion);
+  const versionMismatch = Number.isFinite(resultVersion)
+    && Number.isFinite(currentVersion)
+    && resultVersion !== currentVersion;
+  const columnsByCategory = {
+    buses: [
+      { key: "status", label: "", render: (row) => <span className="analysis-result-color-dot" style={{ background: voltagePuColor(row.voltagePu, row.status) }} title={row.status} /> },
+      { key: "busId", label: "Barra", render: busLabel },
+      { key: "voltageKv", label: "kV", render: (row) => formatResultNumber(row.voltageKv, 3) },
+      { key: "voltagePu", label: "p.u.", render: (row) => formatResultNumber(row.voltagePu, 4) },
+      { key: "angleDeg", label: "Ángulo", render: (row) => `${formatResultNumber(row.angleDeg, 3)}°` },
+      { key: "activePowerInjectionKw", label: "P inyección", render: (row) => formatPowerKw(row.activePowerInjectionKw) },
+      { key: "reactivePowerInjectionKvar", label: "Q inyección", render: (row) => formatReactivePowerKvar(row.reactivePowerInjectionKvar) },
+      { key: "statusText", label: "Estado", render: (row) => row.status || "—" },
+    ],
+    branches: [
+      { key: "status", label: "", render: (row) => <span className="analysis-result-color-dot" style={{ background: loadingColor(row.loadingPercent, row.status) }} title={row.status} /> },
+      { key: "componentId", label: "Línea", render: (row) => componentLabel(row.componentId) },
+      { key: "activePowerFromKw", label: "P origen", render: (row) => formatPowerKw(row.activePowerFromKw) },
+      { key: "reactivePowerFromKvar", label: "Q origen", render: (row) => formatReactivePowerKvar(row.reactivePowerFromKvar) },
+      { key: "currentFromA", label: "Corriente", render: (row) => formatCurrentA(row.currentFromA) },
+      { key: "loadingPercent", label: "Carga", render: (row) => `${formatResultNumber(row.loadingPercent, 2)} %` },
+      { key: "activeLossKw", label: "Pérdidas", render: (row) => formatPowerKw(row.activeLossKw) },
+      { key: "direction", label: "Dirección" },
+    ],
+    transformers: [
+      { key: "componentId", label: "Transformador", render: (row) => componentLabel(row.componentId) },
+      { key: "primaryVoltageKv", label: "Primario", render: (row) => `${formatResultNumber(row.primaryVoltageKv, 3)} kV` },
+      { key: "secondaryVoltageKv", label: "Secundario", render: (row) => `${formatResultNumber(row.secondaryVoltageKv, 3)} kV` },
+      { key: "activePowerPrimaryKw", label: "P primario", render: (row) => formatPowerKw(row.activePowerPrimaryKw) },
+      { key: "loadingPercent", label: "Carga", render: (row) => `${formatResultNumber(row.loadingPercent, 2)} %` },
+      { key: "tapPosition", label: "Tap" },
+      { key: "activeLossKw", label: "Pérdidas", render: (row) => formatPowerKw(row.activeLossKw) },
+    ],
+    generators: [
+      { key: "componentId", label: "Generador", render: (row) => componentLabel(row.componentId) },
+      { key: "controlMode", label: "Control" },
+      { key: "activePowerKw", label: "P", render: (row) => formatPowerKw(row.activePowerKw) },
+      { key: "reactivePowerKvar", label: "Q", render: (row) => formatReactivePowerKvar(row.reactivePowerKvar) },
+      { key: "voltagePu", label: "Tensión", render: (row) => row.voltagePu == null ? "—" : `${formatResultNumber(row.voltagePu, 4)} p.u.` },
+      { key: "inService", label: "Servicio", render: (row) => row.inService ? "Sí" : "No" },
+    ],
+    loads: [
+      { key: "componentId", label: "Carga", render: (row) => componentLabel(row.componentId) },
+      { key: "activePowerKw", label: "P", render: (row) => formatPowerKw(row.activePowerKw) },
+      { key: "reactivePowerKvar", label: "Q", render: (row) => formatReactivePowerKvar(row.reactivePowerKvar) },
+      { key: "busId", label: "Barra" },
+      { key: "inService", label: "Servicio", render: (row) => row.inService ? "Sí" : "No" },
+    ],
+    warnings: [
+      { key: "code", label: "Código" },
+      { key: "message", label: "Mensaje" },
+      { key: "componentId", label: "Componente" },
+    ],
+  };
+
+  return (
+    <div className="analysis-tab-content">
+      <section className="analysis-section-card analysis-active-result-card">
+        <div className="analysis-study-heading">
+          <div>
+            <span className="eyebrow">Resultado activo</span>
+            <h3>{overlay.study?.name || "Flujo de carga"}</h3>
+            <code>{result.studyId}</code>
+          </div>
+          <button className="mini-button danger-outline" type="button" onClick={actions.clearActiveAnalysisResult} title="Quitar resultados">×</button>
+        </div>
+        <div className="read-only-grid">
+          <span>Caso</span><strong>{result.operatingCaseId || overlay.study?.operatingCaseId || "—"}</strong>
+          <span>Versión</span><strong>{result.diagramStorageVersion ?? overlay.study?.inputDiagramVersion ?? "—"}</strong>
+          <span>Motor</span><strong>{result.engine?.name || overlay.study?.engineName || "—"} {result.engine?.version || ""}</strong>
+          <span>Convergencia</span><strong>{result.convergence?.converged ? "Convergió" : "No convergió"}</strong>
+          <span>Iteraciones</span><strong>{result.convergence?.iterations ?? "—"}</strong>
+          <span>Duración</span><strong>{result.convergence?.durationMs != null ? `${formatResultNumber(result.convergence.durationMs, 0)} ms` : "—"}</strong>
+        </div>
+      </section>
+
+      {versionMismatch && (
+        <section className="analysis-operation-message analysis-operation-message--warning">
+          Este estudio fue calculado con la versión {resultVersion}, mientras el diagrama actual está en la versión {currentVersion}. Se muestran los resultados sobre los IDs que todavía existen.
+        </section>
+      )}
+
+      <div className="analysis-stat-grid analysis-result-summary-grid">
+        <div><span>Tensión mínima</span><strong>{formatResultNumber(summary.minimumVoltagePu, 4)} p.u.</strong></div>
+        <div><span>Tensión máxima</span><strong>{formatResultNumber(summary.maximumVoltagePu, 4)} p.u.</strong></div>
+        <div><span>Carga máxima</span><strong>{formatResultNumber(summary.maximumLoadingPercent, 2)} %</strong></div>
+        <div><span>Demanda activa</span><strong>{formatPowerKw(summary.totalLoadActivePowerKw)}</strong></div>
+        <div><span>Generación activa</span><strong>{formatPowerKw(summary.totalGenerationActivePowerKw)}</strong></div>
+        <div><span>Pérdidas activas</span><strong>{formatPowerKw(summary.totalActiveLossKw)}</strong></div>
+      </div>
+
+      <section className="analysis-section-card">
+        <h3>Capa visual</h3>
+        <div className="analysis-overlay-controls">
+          <OverlayOption checked={options.visible} label="Mostrar resultados" onChange={(value) => actions.updateAnalysisOverlayOptions({ visible: value })} />
+          <OverlayOption checked={options.colorBusesByVoltage} label="Colorear barras por tensión" onChange={(value) => actions.updateAnalysisOverlayOptions({ colorBusesByVoltage: value })} />
+          <OverlayOption checked={options.colorBranchesByLoading} label="Colorear líneas por carga" onChange={(value) => actions.updateAnalysisOverlayOptions({ colorBranchesByLoading: value })} />
+          <OverlayOption checked={options.showBusVoltages} label="Tensiones de barras" onChange={(value) => actions.updateAnalysisOverlayOptions({ showBusVoltages: value })} />
+          <OverlayOption checked={options.showBusAngles} label="Ángulos" onChange={(value) => actions.updateAnalysisOverlayOptions({ showBusAngles: value })} />
+          <OverlayOption checked={options.showActivePowerFlows} label="Potencia activa" onChange={(value) => actions.updateAnalysisOverlayOptions({ showActivePowerFlows: value })} />
+          <OverlayOption checked={options.showReactivePowerFlows} label="Potencia reactiva" onChange={(value) => actions.updateAnalysisOverlayOptions({ showReactivePowerFlows: value })} />
+          <OverlayOption checked={options.showCurrents} label="Corrientes" onChange={(value) => actions.updateAnalysisOverlayOptions({ showCurrents: value })} />
+          <OverlayOption checked={options.showLoading} label="Cargabilidad" onChange={(value) => actions.updateAnalysisOverlayOptions({ showLoading: value })} />
+          <OverlayOption checked={options.showLosses} label="Pérdidas" onChange={(value) => actions.updateAnalysisOverlayOptions({ showLosses: value })} />
+          <OverlayOption checked={options.showFlowArrows} label="Flechas de flujo" onChange={(value) => actions.updateAnalysisOverlayOptions({ showFlowArrows: value })} />
+          <OverlayOption checked={options.showEquipmentPower} label="Potencia en equipos" onChange={(value) => actions.updateAnalysisOverlayOptions({ showEquipmentPower: value })} />
+        </div>
+        <div className="analysis-voltage-legend" aria-label="Escala de tensión por unidad">
+          <span style={{ background: "#dc2626" }}>≤ 0,90</span>
+          <span style={{ background: "#f97316" }}>0,90–0,95</span>
+          <span style={{ background: "#eab308" }}>0,95–0,98</span>
+          <span style={{ background: "#16a34a" }}>0,98–1,02</span>
+          <span style={{ background: "#0284c7" }}>1,02–1,05</span>
+          <span style={{ background: "#7c3aed" }}>&gt; 1,05</span>
+        </div>
+      </section>
+
+      <section className="analysis-section-card analysis-section-card--wide">
+        <div className="analysis-result-category-tabs">
+          {RESULT_CATEGORIES.map(([id, label]) => (
+            <button key={id} type="button" className={category === id ? "active" : ""} onClick={() => setCategory(id)}>
+              {label} <small>{Array.isArray(result[id]) ? result[id].length : 0}</small>
+            </button>
+          ))}
+        </div>
+        <ResultTable
+          columns={columnsByCategory[category]}
+          rows={rows}
+          emptyMessage={`No existen resultados de ${RESULT_CATEGORIES.find(([id]) => id === category)?.[1].toLowerCase()} en este estudio.`}
+        />
+      </section>
+    </div>
+  );
+}
+
 export default function AnalysisPanel() {
-  const document = useEditorSelector((state) => state.document);
+  const editorData = useEditorSelector((state) => ({
+    document: state.document,
+    analysisOverlay: state.ui.analysisOverlay,
+  }), shallowEqual);
+  const document = editorData.document;
   const editorActions = useEditorActions();
   const {
     activeProject,
@@ -738,6 +993,7 @@ export default function AnalysisPanel() {
       <div className="analysis-tabs" role="tablist">
         {[
           ["execute", "Ejecutar"],
+          ["results", "Resultados"],
           ["overview", "Preparación"],
           ["cases", "Casos"],
           ["configuration", "Solver"],
@@ -757,6 +1013,7 @@ export default function AnalysisPanel() {
           workspaceActions={workspaceActions}
         />
       )}
+      {tab === "results" && <ResultsTab overlay={editorData.analysisOverlay} actions={editorActions} activeDiagram={activeDiagram} document={document} />}
       {tab === "overview" && <OverviewTab document={document} validation={validation} activeDiagram={activeDiagram} />}
       {tab === "cases" && <CasesTab document={document} validation={validation} actions={editorActions} canEdit={Boolean(activeProject?.canEdit)} />}
       {tab === "configuration" && <ConfigurationTab configuration={configuration} actions={editorActions} canEdit={Boolean(activeProject?.canEdit)} />}

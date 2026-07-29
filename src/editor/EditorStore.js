@@ -21,6 +21,7 @@ import { synchronizeElectricalModel } from "../domain/electrical/electricalModel
 import { markParameterAsUserValue, patchParameterMetadata } from "../domain/electrical/parameterValue.js";
 import { createOperatingCase, normalizeOperatingCases } from "../domain/analysis/operatingCases.js";
 import { normalizeAnalysisConfiguration } from "../domain/analysis/analysisConfiguration.js";
+import { DEFAULT_ANALYSIS_OVERLAY_OPTIONS, normalizeAnalysisResult } from "../domain/analysis/analysisResults.js";
 
 const HISTORY_LIMIT = 100;
 const DRAW_TOOLS = new Set(["path", "line"]);
@@ -44,6 +45,11 @@ export function createInitialEditorState(document) {
       voltageLevelsOpen: false,
       electricalEditor: null,
       rightPanelMode: "properties",
+      analysisOverlay: {
+        study: null,
+        result: null,
+        options: { ...DEFAULT_ANALYSIS_OVERLAY_OPTIONS },
+      },
       notice: null,
     },
   };
@@ -435,6 +441,56 @@ export class EditorStore {
 
       closeAnalysisPanel: () => {
         this.setState((state) => ({ ...state, ui: { ...state.ui, rightPanelMode: "properties" } }));
+      },
+
+      activateAnalysisResult: (study, result) => {
+        const normalized = normalizeAnalysisResult(result);
+        this.setState((state) => ({
+          ...state,
+          ui: {
+            ...state.ui,
+            analysisOverlay: {
+              study: study ? { ...study } : null,
+              result: normalized,
+              options: {
+                ...DEFAULT_ANALYSIS_OVERLAY_OPTIONS,
+                ...(state.ui.analysisOverlay?.options ?? {}),
+                visible: true,
+              },
+            },
+          },
+        }));
+      },
+
+      clearActiveAnalysisResult: () => {
+        this.setState((state) => ({
+          ...state,
+          ui: {
+            ...state.ui,
+            analysisOverlay: {
+              study: null,
+              result: null,
+              options: { ...DEFAULT_ANALYSIS_OVERLAY_OPTIONS },
+            },
+          },
+        }));
+      },
+
+      updateAnalysisOverlayOptions: (patch) => {
+        this.setState((state) => ({
+          ...state,
+          ui: {
+            ...state.ui,
+            analysisOverlay: {
+              ...(state.ui.analysisOverlay ?? {}),
+              options: {
+                ...DEFAULT_ANALYSIS_OVERLAY_OPTIONS,
+                ...(state.ui.analysisOverlay?.options ?? {}),
+                ...patch,
+              },
+            },
+          },
+        }));
       },
 
       addOperatingCase: (name) => {

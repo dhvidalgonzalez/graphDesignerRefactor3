@@ -3,6 +3,7 @@ import { shallowEqual, useEditorActions, useEditorSelector, useEditorStore } fro
 import { getEdgeMiddlePoint, getEdgePoints } from "../../domain/diagram/edgeGeometry.js";
 import { getVoltageColor } from "../../domain/catalog/symbolCatalog.js";
 import { getEndpointVoltageLevelId } from "../../domain/electrical/topology.js";
+import { createAnalysisResultIndex, loadingColor } from "../../domain/analysis/analysisResults.js";
 
 export default function EdgeView({ edgeId }) {
   const data = useEditorSelector((state) => ({
@@ -12,6 +13,7 @@ export default function EdgeView({ edgeId }) {
     selectedVertex: state.selection.edgeId === edgeId ? state.selection.vertexIndex : null,
     tool: state.tool,
     scale: state.viewport.scale,
+    analysisOverlay: state.ui.analysisOverlay,
   }), shallowEqual);
   const actions = useEditorActions();
   const store = useEditorStore();
@@ -25,7 +27,14 @@ export default function EdgeView({ edgeId }) {
   const color = getVoltageColor(data.document.metadata, levelId, edge.properties.outOfService);
   const isLine = edge.kind === "line";
   const middle = isLine ? getEdgeMiddlePoint(data.document, edge) : null;
-  const stroke = data.selected ? "#2563eb" : color;
+  const resultIndex = data.analysisOverlay?.result
+    ? createAnalysisResultIndex(data.document, data.analysisOverlay.result)
+    : null;
+  const branchResult = resultIndex?.branchByComponentId.get(edge.id) ?? null;
+  const resultColor = branchResult && data.analysisOverlay?.options?.visible && data.analysisOverlay?.options?.colorBranchesByLoading
+    ? loadingColor(branchResult.loadingPercent, branchResult.status)
+    : color;
+  const stroke = data.selected ? "#2563eb" : resultColor;
 
   const handleClick = (event) => {
     event.cancelBubble = true;

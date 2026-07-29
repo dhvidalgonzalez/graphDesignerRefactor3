@@ -1,24 +1,31 @@
-import { useRef } from "react";
+import { useMemo, useRef } from "react";
 import { Circle, Group, Rect, Text } from "react-konva";
 import { shallowEqual, useEditorActions, useEditorSelector, useEditorStore } from "../../editor/EditorContext.jsx";
 import { getNodeBounds, getNodePorts, getSymbolDefinition, getVoltageColor } from "../../domain/catalog/symbolCatalog.js";
+import { createAnalysisResultIndex, getBusResultForNode, voltagePuColor } from "../../domain/analysis/analysisResults.js";
 
 const DRAW_TOOLS = new Set(["path", "line"]);
 
 export default function NodeView({ nodeId }) {
   const data = useEditorSelector((state) => ({
     node: state.document.nodes[nodeId],
+    document: state.document,
     metadata: state.document.metadata,
     selected: state.selection.nodeIds.includes(nodeId),
     tool: state.tool,
     showPorts: state.settings.showPorts,
     viewportScale: state.viewport.scale,
     draftSource: state.connectionDraft?.source ?? null,
+    analysisOverlay: state.ui.analysisOverlay,
   }), shallowEqual);
   const actions = useEditorActions();
   const store = useEditorStore();
   const readOnly = store.readOnly;
   const groupRef = useRef(null);
+  const resultIndex = useMemo(
+    () => (data.analysisOverlay?.result ? createAnalysisResultIndex(data.document, data.analysisOverlay.result) : null),
+    [data.analysisOverlay?.result, data.document],
+  );
   const { node } = data;
   if (!node) return null;
 
@@ -29,7 +36,18 @@ export default function NodeView({ nodeId }) {
   const label = definition.labelPlacement;
   const drawing = DRAW_TOOLS.has(data.tool);
   const portsVisible = data.showPorts || drawing || data.selected;
-  const colorForVoltage = (levelId, outOfService) => getVoltageColor(data.metadata, levelId, outOfService);
+  const busResult = resultIndex ? getBusResultForNode(resultIndex, node.id) : null;
+  const colorForVoltage = (levelId, outOfService) => {
+    if (
+      node.type === "ElmTerm" &&
+      data.analysisOverlay?.options?.visible &&
+      data.analysisOverlay?.options?.colorBusesByVoltage &&
+      busResult
+    ) {
+      return voltagePuColor(busResult.voltagePu, busResult.status);
+    }
+    return getVoltageColor(data.metadata, levelId, outOfService);
+  };
 
   const selectForInteraction = (event) => {
     event.cancelBubble = true;
