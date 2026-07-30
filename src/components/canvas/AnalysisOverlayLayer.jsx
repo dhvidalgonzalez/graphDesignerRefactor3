@@ -1,5 +1,5 @@
 import { Arrow, Group, Rect, Text } from "react-konva";
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { shallowEqual, useEditorActions, useEditorSelector } from "../../editor/EditorContext.jsx";
 import { getEdgePoints } from "../../domain/diagram/edgeGeometry.js";
 import {
@@ -14,6 +14,7 @@ import {
   getConnectionNodePosition,
   getEquipmentPosition,
   loadingColor,
+  normalizeAnalysisOverlayOptions,
 } from "../../domain/analysis/analysisResults.js";
 
 function ResultLabel({
@@ -22,26 +23,20 @@ function ResultLabel({
   y,
   title,
   lines,
+  showTitle = false,
   anchor = "left",
   offset,
   onMove,
 }) {
-  const [hovered, setHovered] = useState(false);
-  const safeLines = lines.filter(Boolean);
-  if (!safeLines.length) return null;
+  const rows = [showTitle ? title : null, ...lines].filter(Boolean);
+  if (!rows.length) return null;
 
-  const displayedLines = hovered ? safeLines : safeLines.slice(0, 1);
-  const compactText = displayedLines[0] || title || "Resultado";
-  const longest = Math.max(
-    hovered ? title?.length ?? 0 : 0,
-    ...displayedLines.map((line) => line.length),
-  );
-  const width = hovered
-    ? Math.max(24, Math.min(52, longest * 1.48 + 5))
-    : Math.max(14, Math.min(32, compactText.length * 1.33 + 4));
-  const lineHeight = hovered ? 3.25 : 2.9;
-  const titleHeight = hovered && title ? 3.6 : 0;
-  const height = 2.3 + titleHeight + displayedLines.length * lineHeight;
+  const longest = Math.max(...rows.map((line) => String(line).length));
+  const horizontalPadding = 1.45;
+  const verticalPadding = 0.8;
+  const lineHeight = 2.45;
+  const width = Math.max(10.5, Math.min(43, longest * 1.18 + horizontalPadding * 2));
+  const height = verticalPadding * 2 + rows.length * lineHeight;
   const anchorOffset = anchor === "center" ? -width / 2 : anchor === "right" ? -width : 0;
   const originX = x + anchorOffset;
   const originY = y;
@@ -53,21 +48,25 @@ function ResultLabel({
       x={originX + layout.x}
       y={originY + layout.y}
       draggable
-      onDragStart={(event) => { event.cancelBubble = true; }}
+      onDragStart={(event) => {
+        event.cancelBubble = true;
+        const container = event.target.getStage()?.container();
+        if (container) container.style.cursor = "grabbing";
+      }}
       onDragEnd={(event) => {
         event.cancelBubble = true;
+        const container = event.target.getStage()?.container();
+        if (container) container.style.cursor = "move";
         onMove?.({
           x: event.target.x() - originX,
           y: event.target.y() - originY,
         });
       }}
       onMouseEnter={(event) => {
-        setHovered(true);
         const container = event.target.getStage()?.container();
         if (container) container.style.cursor = "move";
       }}
       onMouseLeave={(event) => {
-        setHovered(false);
         const container = event.target.getStage()?.container();
         if (container) container.style.cursor = "default";
       }}
@@ -77,36 +76,24 @@ function ResultLabel({
       <Rect
         width={width}
         height={height}
-        fill={hovered ? "rgba(255,255,255,0.98)" : "rgba(255,255,255,0.9)"}
+        fill="rgba(255,255,255,0.94)"
         stroke="rgba(15,23,42,0.72)"
-        strokeWidth={hovered ? 0.42 : 0.28}
-        cornerRadius={1.05}
-        shadowColor="rgba(15,23,42,0.16)"
-        shadowBlur={hovered ? 2.2 : 0.8}
-        shadowOffsetY={hovered ? 0.7 : 0.3}
+        strokeWidth={0.24}
+        cornerRadius={0.65}
+        shadowColor="rgba(15,23,42,0.10)"
+        shadowBlur={0.45}
+        shadowOffsetY={0.2}
       />
-      {hovered && title && (
-        <Text
-          x={2}
-          y={0.85}
-          width={width - 4}
-          text={title}
-          fill="#0f172a"
-          fontSize={2.15}
-          fontStyle="bold"
-          ellipsis
-          wrap="none"
-        />
-      )}
-      {displayedLines.map((line, index) => (
+      {rows.map((line, index) => (
         <Text
           key={`${line}-${index}`}
-          x={2}
-          y={1.05 + titleHeight + index * lineHeight}
-          width={width - 4}
-          text={line}
-          fill="#1e293b"
-          fontSize={hovered ? 2.05 : 1.9}
+          x={horizontalPadding}
+          y={verticalPadding + index * lineHeight + 0.25}
+          width={width - horizontalPadding * 2}
+          text={String(line)}
+          fill="#172033"
+          fontSize={index === 0 && showTitle ? 1.72 : 1.68}
+          fontStyle={index === 0 && showTitle ? "bold" : "normal"}
           wrap="none"
           ellipsis
         />
@@ -138,7 +125,7 @@ export default function AnalysisOverlayLayer() {
   const actions = useEditorActions();
   const rawResult = data.overlay?.result;
   const viewId = data.overlay?.viewId;
-  const options = data.overlay?.options;
+  const options = normalizeAnalysisOverlayOptions(data.overlay?.options);
   const result = useMemo(
     () => (rawResult ? getAnalysisNetworkResult(rawResult, viewId) : null),
     [rawResult, viewId],
@@ -148,7 +135,7 @@ export default function AnalysisOverlayLayer() {
     [data.document, rawResult, viewId],
   );
 
-  if (!rawResult || !result || !options?.visible || !index) return null;
+  if (!rawResult || !result || !options.visible || !index) return null;
 
   const offsetFor = (id) => data.overlay?.labelOffsets?.[`${viewId || "network"}:${id}`] ?? { x: 0, y: 0 };
   const moveLabel = (id, offset) => actions.moveAnalysisResultLabel(`${viewId || "network"}:${id}`, offset);
@@ -180,15 +167,18 @@ export default function AnalysisOverlayLayer() {
         if (!position) return null;
         const id = `bus:${bus.connectionNodeId || bus.busId}`;
         const lines = [];
-        if (options.showBusVoltages) lines.push(`${formatResultNumber(bus.voltagePu, 4)} p.u. · ${formatResultNumber(bus.voltageKv, 2)} kV`);
-        if (options.showBusAngles) lines.push(`${formatResultNumber(bus.angleDeg, 3)}° · ${bus.status || "NORMAL"}`);
+        if (options.showBusVoltagePu) lines.push(`${formatResultNumber(bus.voltagePu, 4)} p.u.`);
+        if (options.showBusVoltageKv) lines.push(`${formatResultNumber(bus.voltageKv, 2)} kV`);
+        if (options.showBusAngleDeg) lines.push(`${formatResultNumber(bus.angleDeg, 3)}°`);
+        if (options.showBusStatus) lines.push(bus.status || "NORMAL");
         return (
           <ResultLabel
             key={id}
             id={`analysis-${id}`}
             x={position.x + 4}
-            y={position.y - 7}
+            y={position.y - 6}
             title={busTitle(data.document, index, bus)}
+            showTitle={options.showComponentNames}
             lines={lines}
             offset={offsetFor(id)}
             onMove={(offset) => moveLabel(id, offset)}
@@ -201,18 +191,20 @@ export default function AnalysisOverlayLayer() {
         if (!position) return null;
         const id = `branch:${branch.componentId}`;
         const lines = [];
-        if (options.showActivePowerFlows) lines.push(`P ${formatPowerKw(branch.activePowerFromKw)}`);
-        if (options.showReactivePowerFlows) lines.push(`Q ${formatReactivePowerKvar(branch.reactivePowerFromKvar)}`);
-        if (options.showCurrents) lines.push(`I ${formatCurrentA(branch.currentFromA)}`);
-        if (options.showLoading) lines.push(`${formatResultNumber(branch.loadingPercent, 1)} %`);
-        if (options.showLosses) lines.push(`ΔP ${formatPowerKw(branch.activeLossKw)}`);
+        if (options.showBranchActivePower) lines.push(`P ${formatPowerKw(branch.activePowerFromKw)}`);
+        if (options.showBranchReactivePower) lines.push(`Q ${formatReactivePowerKvar(branch.reactivePowerFromKvar)}`);
+        if (options.showBranchCurrent) lines.push(`I ${formatCurrentA(branch.currentFromA)}`);
+        if (options.showBranchLoading) lines.push(`${formatResultNumber(branch.loadingPercent, 1)} %`);
+        if (options.showBranchLosses) lines.push(`ΔP ${formatPowerKw(branch.activeLossKw)}`);
+        if (options.showBranchDirection) lines.push(branch.direction || "NONE");
         return (
           <ResultLabel
             key={id}
             id={`analysis-${id}`}
             x={position.x}
-            y={position.y + 2.8}
+            y={position.y + 2.2}
             title={branchTitle(data.document, branch)}
+            showTitle={options.showComponentNames}
             lines={lines}
             anchor="center"
             offset={offsetFor(id)}
@@ -221,36 +213,44 @@ export default function AnalysisOverlayLayer() {
         );
       })}
 
-      {options.showEquipmentPower && result.generators.map((generator) => {
+      {result.generators.map((generator) => {
         const position = getEquipmentPosition(data.document, generator.componentId);
         if (!position) return null;
         const id = `generator:${generator.componentId}`;
+        const lines = [];
+        if (options.showGeneratorActivePower) lines.push(`P ${formatPowerKw(generator.activePowerKw)}`);
+        if (options.showGeneratorReactivePower) lines.push(`Q ${formatReactivePowerKvar(generator.reactivePowerKvar)}`);
         return (
           <ResultLabel
             key={id}
             id={`analysis-${id}`}
             x={position.x + 5}
-            y={position.y + 5}
+            y={position.y + 4.5}
             title={data.document.nodes?.[generator.componentId]?.properties?.name || generator.componentId}
-            lines={[`P ${formatPowerKw(generator.activePowerKw)}`, `Q ${formatReactivePowerKvar(generator.reactivePowerKvar)}`]}
+            showTitle={options.showComponentNames}
+            lines={lines}
             offset={offsetFor(id)}
             onMove={(offset) => moveLabel(id, offset)}
           />
         );
       })}
 
-      {options.showEquipmentPower && result.loads.map((load) => {
+      {result.loads.map((load) => {
         const position = getEquipmentPosition(data.document, load.componentId);
         if (!position) return null;
         const id = `load:${load.componentId}`;
+        const lines = [];
+        if (options.showLoadActivePower) lines.push(`P ${formatPowerKw(load.activePowerKw)}`);
+        if (options.showLoadReactivePower) lines.push(`Q ${formatReactivePowerKvar(load.reactivePowerKvar)}`);
         return (
           <ResultLabel
             key={id}
             id={`analysis-${id}`}
             x={position.x + 5}
-            y={position.y + 5}
+            y={position.y + 4.5}
             title={data.document.nodes?.[load.componentId]?.properties?.name || load.componentId}
-            lines={[`P ${formatPowerKw(load.activePowerKw)}`, `Q ${formatReactivePowerKvar(load.reactivePowerKvar)}`]}
+            showTitle={options.showComponentNames}
+            lines={lines}
             offset={offsetFor(id)}
             onMove={(offset) => moveLabel(id, offset)}
           />
@@ -261,6 +261,12 @@ export default function AnalysisOverlayLayer() {
         const position = getEquipmentPosition(data.document, transformer.componentId);
         if (!position) return null;
         const id = `transformer:${transformer.componentId}`;
+        const lines = [];
+        if (options.showTransformerActivePower) lines.push(`P ${formatPowerKw(transformer.activePowerPrimaryKw)}`);
+        if (options.showTransformerReactivePower) lines.push(`Q ${formatReactivePowerKvar(transformer.reactivePowerPrimaryKvar)}`);
+        if (options.showTransformerLoading) lines.push(`${formatResultNumber(transformer.loadingPercent, 1)} %`);
+        if (options.showTransformerLosses) lines.push(`ΔP ${formatPowerKw(transformer.activeLossKw)}`);
+        if (options.showTransformerTap) lines.push(`Tap ${formatResultNumber(transformer.tapPosition, 0)}`);
         return (
           <ResultLabel
             key={id}
@@ -268,11 +274,8 @@ export default function AnalysisOverlayLayer() {
             x={position.x + 6}
             y={position.y - 3}
             title={data.document.nodes?.[transformer.componentId]?.properties?.name || transformer.componentId}
-            lines={[
-              options.showActivePowerFlows ? `P ${formatPowerKw(transformer.activePowerPrimaryKw)}` : null,
-              options.showLoading ? `${formatResultNumber(transformer.loadingPercent, 1)} %` : null,
-              options.showLosses ? `ΔP ${formatPowerKw(transformer.activeLossKw)}` : null,
-            ]}
+            showTitle={options.showComponentNames}
+            lines={lines}
             offset={offsetFor(id)}
             onMove={(offset) => moveLabel(id, offset)}
           />

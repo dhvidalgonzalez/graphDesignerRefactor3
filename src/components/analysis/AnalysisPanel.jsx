@@ -19,6 +19,7 @@ import {
   analysisResultViews,
   getAnalysisNetworkResult,
   getAnalysisResultView,
+  normalizeAnalysisOverlayOptions,
   parseAnalysisResultText,
 } from "../../domain/analysis/analysisResults.js";
 import { shallowEqual, useEditorActions, useEditorSelector } from "../../editor/EditorContext.jsx";
@@ -822,25 +823,32 @@ function ExecutionTab({
           </div>
           {currentStudy.failureMessage && <p className="analysis-phase-note analysis-phase-note--error">{currentStudy.failureCode}: {currentStudy.failureMessage}</p>}
           <div className="analysis-artifact-actions">
-            <button type="button" onClick={() => showStudy(currentStudy)}>Registro</button>
-            <button type="button" disabled={busy || !currentStudy.inputStorageKey} onClick={() => loadArtifact(currentStudy, "INPUT")}>input.json</button>
-            <button type="button" disabled={busy || !currentStudy.resultStorageKey} onClick={() => loadArtifact(currentStudy, "RESULT", { activate: true })}>Mostrar resultado</button>
-            <button type="button" disabled={busy || !currentStudy.diagnosticsStorageKey} onClick={() => loadArtifact(currentStudy, "DIAGNOSTICS")}>Diagnóstico</button>
+            <button className="button button--soft" type="button" onClick={() => showStudy(currentStudy)}>Registro</button>
+            <button className="button button--soft" type="button" disabled={busy || !currentStudy.inputStorageKey} onClick={() => loadArtifact(currentStudy, "INPUT")}>input.json</button>
+            <button className="button button--soft" type="button" disabled={busy || !currentStudy.resultStorageKey} onClick={() => loadArtifact(currentStudy, "RESULT", { activate: true })}>Mostrar resultado</button>
+            <button className="button button--soft" type="button" disabled={busy || !currentStudy.diagnosticsStorageKey} onClick={() => loadArtifact(currentStudy, "DIAGNOSTICS")}>Diagnóstico</button>
           </div>
         </section>
       )}
 
       <section className="analysis-section-card">
-        <div className="analysis-study-heading"><h3>Estudios recientes</h3><button className="mini-button" type="button" disabled={historyLoading} onClick={refreshHistory}>↻</button></div>
-        <div className="analysis-history-list">
+        <div className="analysis-study-heading">
+          <h3>Estudios recientes</h3>
+          <button className="mini-button" type="button" disabled={historyLoading} onClick={refreshHistory} title="Actualizar estudios">↻</button>
+        </div>
+        <div className="analysis-study-list">
           {history.map((study) => (
-            <div key={study.id} className="analysis-history-row">
-              <button type="button" onClick={() => showStudy(study)}>
+            <div key={study.id} className={currentStudy?.id === study.id ? "active" : ""}>
+              <button className="analysis-study-main" type="button" onClick={() => showStudy(study)}>
+                <span className={`analysis-status analysis-status--${statusTone(study.status)}`}>{ANALYSIS_STATUS_LABELS[study.status] ?? study.status}</span>
                 <strong>{study.name || analysisTypeLabel(study.analysisType)}</strong>
-                <span>{analysisTypeLabel(study.analysisType)} · {formatStudyDate(study.requestedAt)}</span>
+                <small>{analysisTypeLabel(study.analysisType)} · {formatStudyDate(study.requestedAt)}</small>
               </button>
-              <span className={`analysis-status analysis-status--${statusTone(study.status)}`}>{ANALYSIS_STATUS_LABELS[study.status] ?? study.status}</span>
-              {study.resultStorageKey && <button className="mini-button" type="button" onClick={() => loadArtifact(study, "RESULT", { activate: true })}>Mostrar</button>}
+              {study.resultStorageKey && (
+                <button className="analysis-study-activate" type="button" onClick={() => loadArtifact(study, "RESULT", { activate: true })}>
+                  Mostrar
+                </button>
+              )}
             </div>
           ))}
           {!historyLoading && !history.length && <p className="analysis-phase-note">Todavía no existen estudios para este diagrama.</p>}
@@ -861,11 +869,93 @@ function OverlayOption({ checked, label, onChange }) {
   return <ToggleField checked={checked} label={label} onChange={onChange} />;
 }
 
+function LabelOptionGroup({ title, description, children }) {
+  return (
+    <section className="analysis-section-card analysis-label-option-group">
+      <div className="analysis-label-option-heading">
+        <h3>{title}</h3>
+        {description && <p>{description}</p>}
+      </div>
+      <div className="analysis-overlay-controls">{children}</div>
+    </section>
+  );
+}
+
+function LabelsTab({ overlay, actions }) {
+  if (!overlay?.result) {
+    return (
+      <div className="analysis-tab-content">
+        <section className="analysis-empty-result">
+          <strong>No hay un estudio activo</strong>
+          <span>Selecciona un resultado convergente para configurar sus etiquetas.</span>
+        </section>
+      </div>
+    );
+  }
+
+  const options = normalizeAnalysisOverlayOptions(overlay.options);
+  const update = (key) => (value) => actions.updateAnalysisOverlayOptions({ [key]: value });
+
+  return (
+    <div className="analysis-tab-content">
+      <section className="analysis-section-card analysis-label-settings-intro">
+        <div>
+          <h3>Etiquetas del estudio activo</h3>
+          <p>Marca sólo los valores que necesitas ver. No existe expansión por hover: la caja muestra siempre la selección actual y puede moverse libremente.</p>
+        </div>
+        <div className="analysis-label-settings-actions">
+          <button className="button button--soft" type="button" onClick={actions.resetAnalysisResultLabelLayout}>Restablecer posiciones</button>
+          <button className="button button--soft" type="button" onClick={actions.resetAnalysisOverlayOptions}>Valores predeterminados</button>
+        </div>
+      </section>
+
+      <LabelOptionGroup title="Capa general" description="Visibilidad, colores y ayudas de lectura.">
+        <OverlayOption checked={options.visible} label="Mostrar resultados" onChange={update("visible")} />
+        <OverlayOption checked={options.showComponentNames} label="Nombre del componente" onChange={update("showComponentNames")} />
+        <OverlayOption checked={options.colorBusesByVoltage} label="Colorear barras por tensión" onChange={update("colorBusesByVoltage")} />
+        <OverlayOption checked={options.colorBranchesByLoading} label="Colorear líneas por carga" onChange={update("colorBranchesByLoading")} />
+        <OverlayOption checked={options.showFlowArrows} label="Flechas de flujo" onChange={update("showFlowArrows")} />
+      </LabelOptionGroup>
+
+      <LabelOptionGroup title="Barras" description="Magnitud, ángulo y estado eléctrico de cada barra.">
+        <OverlayOption checked={options.showBusVoltagePu} label="Tensión en p.u." onChange={update("showBusVoltagePu")} />
+        <OverlayOption checked={options.showBusVoltageKv} label="Tensión en kV" onChange={update("showBusVoltageKv")} />
+        <OverlayOption checked={options.showBusAngleDeg} label="Ángulo" onChange={update("showBusAngleDeg")} />
+        <OverlayOption checked={options.showBusStatus} label="Estado de tensión" onChange={update("showBusStatus")} />
+      </LabelOptionGroup>
+
+      <LabelOptionGroup title="Líneas" description="Valores tomados en el extremo de origen del resultado.">
+        <OverlayOption checked={options.showBranchActivePower} label="Potencia activa" onChange={update("showBranchActivePower")} />
+        <OverlayOption checked={options.showBranchReactivePower} label="Potencia reactiva" onChange={update("showBranchReactivePower")} />
+        <OverlayOption checked={options.showBranchCurrent} label="Corriente" onChange={update("showBranchCurrent")} />
+        <OverlayOption checked={options.showBranchLoading} label="Cargabilidad" onChange={update("showBranchLoading")} />
+        <OverlayOption checked={options.showBranchLosses} label="Pérdidas activas" onChange={update("showBranchLosses")} />
+        <OverlayOption checked={options.showBranchDirection} label="Dirección del flujo" onChange={update("showBranchDirection")} />
+      </LabelOptionGroup>
+
+      <LabelOptionGroup title="Transformadores" description="Potencias, carga, pérdidas y posición de tap.">
+        <OverlayOption checked={options.showTransformerActivePower} label="Potencia activa" onChange={update("showTransformerActivePower")} />
+        <OverlayOption checked={options.showTransformerReactivePower} label="Potencia reactiva" onChange={update("showTransformerReactivePower")} />
+        <OverlayOption checked={options.showTransformerLoading} label="Cargabilidad" onChange={update("showTransformerLoading")} />
+        <OverlayOption checked={options.showTransformerLosses} label="Pérdidas activas" onChange={update("showTransformerLosses")} />
+        <OverlayOption checked={options.showTransformerTap} label="Posición de tap" onChange={update("showTransformerTap")} />
+      </LabelOptionGroup>
+
+      <LabelOptionGroup title="Generadores y cargas" description="Selecciona P y Q de forma independiente para cada familia.">
+        <OverlayOption checked={options.showGeneratorActivePower} label="Generador · P" onChange={update("showGeneratorActivePower")} />
+        <OverlayOption checked={options.showGeneratorReactivePower} label="Generador · Q" onChange={update("showGeneratorReactivePower")} />
+        <OverlayOption checked={options.showLoadActivePower} label="Carga · P" onChange={update("showLoadActivePower")} />
+        <OverlayOption checked={options.showLoadReactivePower} label="Carga · Q" onChange={update("showLoadReactivePower")} />
+      </LabelOptionGroup>
+    </div>
+  );
+}
+
 function ResultTable({ columns, rows, emptyMessage }) {
   if (!rows.length) return <p className="analysis-phase-note">{emptyMessage}</p>;
   return (
-    <div className="analysis-result-table-wrap">
-      <table className="analysis-result-table">
+    <div className="analysis-results-table-wrap">
+      <table className="analysis-results-table">
         <thead><tr>{columns.map((column) => <th key={column.key}>{column.label}</th>)}</tr></thead>
         <tbody>{rows.map((row, index) => (
           <tr key={row.componentId || row.busId || row.operatingCaseId || row.multiplier || index}>
@@ -1013,22 +1103,10 @@ function ResultsTab({ overlay, actions, activeDiagram, document }) {
         <div><span>Pérdidas activas</span><strong>{formatPowerKw(summary.totalActiveLossKw)}</strong></div>
       </div>
 
-      <section className="analysis-section-card">
-        <div className="analysis-study-heading"><h3>Capa visual</h3><button className="mini-button" type="button" onClick={actions.resetAnalysisResultLabelLayout}>Restablecer cajas</button></div>
-        <p className="analysis-phase-note">Las cajas son compactas, se expanden al pasar el cursor y pueden arrastrarse. Su posición queda guardada por estudio y se reutiliza al volver a activarlo.</p>
-        <div className="analysis-overlay-controls">
-          <OverlayOption checked={options.visible} label="Mostrar resultados" onChange={(value) => actions.updateAnalysisOverlayOptions({ visible: value })} />
-          <OverlayOption checked={options.colorBusesByVoltage} label="Colorear barras por tensión" onChange={(value) => actions.updateAnalysisOverlayOptions({ colorBusesByVoltage: value })} />
-          <OverlayOption checked={options.colorBranchesByLoading} label="Colorear líneas por carga" onChange={(value) => actions.updateAnalysisOverlayOptions({ colorBranchesByLoading: value })} />
-          <OverlayOption checked={options.showBusVoltages} label="Tensiones" onChange={(value) => actions.updateAnalysisOverlayOptions({ showBusVoltages: value })} />
-          <OverlayOption checked={options.showBusAngles} label="Ángulos" onChange={(value) => actions.updateAnalysisOverlayOptions({ showBusAngles: value })} />
-          <OverlayOption checked={options.showActivePowerFlows} label="Potencia activa" onChange={(value) => actions.updateAnalysisOverlayOptions({ showActivePowerFlows: value })} />
-          <OverlayOption checked={options.showReactivePowerFlows} label="Potencia reactiva" onChange={(value) => actions.updateAnalysisOverlayOptions({ showReactivePowerFlows: value })} />
-          <OverlayOption checked={options.showCurrents} label="Corrientes" onChange={(value) => actions.updateAnalysisOverlayOptions({ showCurrents: value })} />
-          <OverlayOption checked={options.showLoading} label="Cargabilidad" onChange={(value) => actions.updateAnalysisOverlayOptions({ showLoading: value })} />
-          <OverlayOption checked={options.showLosses} label="Pérdidas" onChange={(value) => actions.updateAnalysisOverlayOptions({ showLosses: value })} />
-          <OverlayOption checked={options.showFlowArrows} label="Flechas de flujo" onChange={(value) => actions.updateAnalysisOverlayOptions({ showFlowArrows: value })} />
-          <OverlayOption checked={options.showEquipmentPower} label="Potencia en equipos" onChange={(value) => actions.updateAnalysisOverlayOptions({ showEquipmentPower: value })} />
+      <section className="analysis-section-card analysis-visual-summary-card">
+        <div>
+          <h3>Visualización en el diagrama</h3>
+          <p>Selecciona exactamente qué valores deben aparecer en las cajas desde la pestaña Etiquetas. Las cajas se mantienen compactas y pueden arrastrarse.</p>
         </div>
       </section>
 
@@ -1059,10 +1137,11 @@ export default function AnalysisPanel() {
     <aside className="properties-panel analysis-panel">
       <div className="panel-header analysis-panel-header"><div><span className="eyebrow">Ejecución y datos</span><h2>Análisis eléctricos</h2></div><button className="mini-button" type="button" onClick={editorActions.closeAnalysisPanel} title="Volver a propiedades">×</button></div>
       <div className="analysis-tabs" role="tablist">
-        {[["execute", "Ejecutar"], ["results", "Resultados"], ["overview", "Preparación"], ["cases", "Casos"], ["configuration", "Solver"], ["model", "Modelo"]].map(([id, label]) => <button key={id} type="button" className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>)}
+        {[["execute", "Ejecutar"], ["results", "Resultados"], ["labels", "Etiquetas"], ["overview", "Preparación"], ["cases", "Casos"], ["configuration", "Solver"], ["model", "Modelo"]].map(([id, label]) => <button key={id} type="button" className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>)}
       </div>
       {tab === "execute" && <ExecutionTab document={document} configuration={configuration} activeProject={activeProject} activeDiagram={activeDiagram} editorActions={editorActions} workspaceActions={workspaceActions} />}
       {tab === "results" && <ResultsTab overlay={editorData.analysisOverlay} actions={editorActions} activeDiagram={activeDiagram} document={document} />}
+      {tab === "labels" && <LabelsTab overlay={editorData.analysisOverlay} actions={editorActions} />}
       {tab === "overview" && <OverviewTab document={document} validation={validation} activeDiagram={activeDiagram} />}
       {tab === "cases" && <CasesTab document={document} validation={validation} actions={editorActions} canEdit={Boolean(activeProject?.canEdit)} />}
       {tab === "configuration" && <ConfigurationTab configuration={configuration} actions={editorActions} canEdit={Boolean(activeProject?.canEdit)} />}

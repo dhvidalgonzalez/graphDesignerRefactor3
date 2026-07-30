@@ -6,6 +6,7 @@ import {
 import {
   analysisResultViews,
   getAnalysisNetworkResult,
+  normalizeAnalysisOverlayOptions,
   parseAnalysisResultText,
 } from "../src/domain/analysis/analysisResults.js";
 import { createAnalysisInputPreview } from "../src/domain/analysis/createAnalysisInput.js";
@@ -70,4 +71,19 @@ describe("arquitectura multi-análisis", () => {
     expect(views.map((item) => item.id)).toEqual(["base", "contingency:line-1"]);
     expect(getAnalysisNetworkResult(result, "contingency:line-1").buses[0].voltagePu).toBe(0.97);
   });
+  it("normaliza las métricas granulares de las etiquetas y conserva opciones antiguas", () => {
+    const options = normalizeAnalysisOverlayOptions({
+      showBusVoltages: false,
+      showActivePowerFlows: false,
+      showEquipmentPower: false,
+      showBranchCurrent: true,
+    });
+    expect(options.showBusVoltagePu).toBe(false);
+    expect(options.showBusVoltageKv).toBe(false);
+    expect(options.showBranchActivePower).toBe(false);
+    expect(options.showGeneratorActivePower).toBe(false);
+    expect(options.showLoadReactivePower).toBe(false);
+    expect(options.showBranchCurrent).toBe(true);
+  });
+
 });

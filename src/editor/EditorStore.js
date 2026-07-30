@@ -24,13 +24,17 @@ import { normalizeAnalysisConfiguration } from "../domain/analysis/analysisConfi
 import {
   DEFAULT_ANALYSIS_OVERLAY_OPTIONS,
   defaultAnalysisResultViewId,
+  normalizeAnalysisOverlayOptions,
   normalizeAnalysisResult,
 } from "../domain/analysis/analysisResults.js";
 import { saveAnalysisResultLayoutService } from "../services/analysis/index.js";
 import {
+  clearAnalysisDisplayOptions,
   clearAnalysisLabelLayout,
+  loadAnalysisDisplayOptions,
   loadAnalysisLabelLayout,
   parseAnalysisLabelLayoutJson,
+  saveAnalysisDisplayOptions,
   saveAnalysisLabelLayout,
 } from "../infrastructure/analysis/localAnalysisLayoutRepository.js";
 
@@ -472,11 +476,10 @@ export class EditorStore {
                 ...parseAnalysisLabelLayoutJson(study?.resultLayoutJson),
                 ...loadAnalysisLabelLayout(diagramId, studyId),
               },
-              options: {
-                ...DEFAULT_ANALYSIS_OVERLAY_OPTIONS,
-                ...(state.ui.analysisOverlay?.options ?? {}),
+              options: normalizeAnalysisOverlayOptions({
+                ...loadAnalysisDisplayOptions(diagramId, studyId),
                 visible: true,
-              },
+              }),
             },
           },
         }));
@@ -562,17 +565,45 @@ export class EditorStore {
       },
 
       updateAnalysisOverlayOptions: (patch) => {
+        const overlay = this.state.ui.analysisOverlay;
+        const nextOptions = normalizeAnalysisOverlayOptions({
+          ...(overlay?.options ?? {}),
+          ...patch,
+        });
+        if (overlay?.result) {
+          saveAnalysisDisplayOptions(
+            this.state.document.id || overlay.result.diagramId,
+            overlay.study?.id || overlay.result.studyId,
+            nextOptions,
+          );
+        }
         this.setState((state) => ({
           ...state,
           ui: {
             ...state.ui,
             analysisOverlay: {
               ...(state.ui.analysisOverlay ?? {}),
-              options: {
-                ...DEFAULT_ANALYSIS_OVERLAY_OPTIONS,
-                ...(state.ui.analysisOverlay?.options ?? {}),
-                ...patch,
-              },
+              options: nextOptions,
+            },
+          },
+        }));
+      },
+
+      resetAnalysisOverlayOptions: () => {
+        const overlay = this.state.ui.analysisOverlay;
+        if (overlay?.result) {
+          clearAnalysisDisplayOptions(
+            this.state.document.id || overlay.result.diagramId,
+            overlay.study?.id || overlay.result.studyId,
+          );
+        }
+        this.setState((state) => ({
+          ...state,
+          ui: {
+            ...state.ui,
+            analysisOverlay: {
+              ...(state.ui.analysisOverlay ?? {}),
+              options: { ...DEFAULT_ANALYSIS_OVERLAY_OPTIONS },
             },
           },
         }));

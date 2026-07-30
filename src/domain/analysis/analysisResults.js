@@ -9,17 +9,63 @@ export const DEFAULT_ANALYSIS_OVERLAY_OPTIONS = Object.freeze({
   visible: true,
   colorBusesByVoltage: true,
   colorBranchesByLoading: true,
-  showBusVoltages: true,
-  showBusAngles: true,
-  showActivePowerFlows: true,
-  showReactivePowerFlows: false,
-  showCurrents: true,
-  showLosses: false,
-  showLoading: true,
   showFlowArrows: true,
-  showEquipmentPower: true,
-  labelsCompact: true,
+  showComponentNames: false,
+
+  showBusVoltagePu: true,
+  showBusVoltageKv: true,
+  showBusAngleDeg: false,
+  showBusStatus: false,
+
+  showBranchActivePower: true,
+  showBranchReactivePower: false,
+  showBranchCurrent: true,
+  showBranchLoading: true,
+  showBranchLosses: false,
+  showBranchDirection: false,
+
+  showTransformerActivePower: true,
+  showTransformerReactivePower: false,
+  showTransformerLoading: true,
+  showTransformerLosses: false,
+  showTransformerTap: false,
+
+  showGeneratorActivePower: true,
+  showGeneratorReactivePower: true,
+  showLoadActivePower: true,
+  showLoadReactivePower: true,
 });
+
+export function normalizeAnalysisOverlayOptions(options) {
+  const value = options && typeof options === "object" ? options : {};
+  return {
+    ...DEFAULT_ANALYSIS_OVERLAY_OPTIONS,
+    ...value,
+
+    // Compatibilidad con las opciones de las primeras versiones de la capa.
+    showBusVoltagePu: value.showBusVoltagePu ?? value.showBusVoltages ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showBusVoltagePu,
+    showBusVoltageKv: value.showBusVoltageKv ?? value.showBusVoltages ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showBusVoltageKv,
+    showBusAngleDeg: value.showBusAngleDeg ?? value.showBusAngles ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showBusAngleDeg,
+    showBusStatus: value.showBusStatus ?? false,
+
+    showBranchActivePower: value.showBranchActivePower ?? value.showActivePowerFlows ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showBranchActivePower,
+    showBranchReactivePower: value.showBranchReactivePower ?? value.showReactivePowerFlows ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showBranchReactivePower,
+    showBranchCurrent: value.showBranchCurrent ?? value.showCurrents ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showBranchCurrent,
+    showBranchLoading: value.showBranchLoading ?? value.showLoading ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showBranchLoading,
+    showBranchLosses: value.showBranchLosses ?? value.showLosses ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showBranchLosses,
+
+    showTransformerActivePower: value.showTransformerActivePower ?? value.showActivePowerFlows ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showTransformerActivePower,
+    showTransformerReactivePower: value.showTransformerReactivePower ?? value.showReactivePowerFlows ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showTransformerReactivePower,
+    showTransformerLoading: value.showTransformerLoading ?? value.showLoading ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showTransformerLoading,
+    showTransformerLosses: value.showTransformerLosses ?? value.showLosses ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showTransformerLosses,
+
+    showGeneratorActivePower: value.showGeneratorActivePower ?? value.showEquipmentPower ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showGeneratorActivePower,
+    showGeneratorReactivePower: value.showGeneratorReactivePower ?? value.showEquipmentPower ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showGeneratorReactivePower,
+    showLoadActivePower: value.showLoadActivePower ?? value.showEquipmentPower ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showLoadActivePower,
+    showLoadReactivePower: value.showLoadReactivePower ?? value.showEquipmentPower ?? DEFAULT_ANALYSIS_OVERLAY_OPTIONS.showLoadReactivePower,
+  };
+}
+
 
 function networkShape(value) {
   const source = value && typeof value === "object" ? value : {};
