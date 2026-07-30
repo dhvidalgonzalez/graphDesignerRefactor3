@@ -1,4 +1,6 @@
-export const ANALYSIS_TYPES = Object.freeze(["POWER_FLOW"]);
+import { ANALYSIS_TYPES } from "./analysisRegistry.js";
+
+export { ANALYSIS_TYPES };
 export const EXECUTION_PREFERENCES = Object.freeze(["AUTO", "STANDARD", "ADVANCED"]);
 export const POWER_FLOW_ALGORITHMS = Object.freeze([
   "NEWTON_RAPHSON",

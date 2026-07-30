@@ -1,17 +1,25 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { createAnalysisInputPreview, createAnalysisRequestPreview } from "../../domain/analysis/createAnalysisInput.js";
-import { evaluateAnalysisReadiness } from "../../domain/analysis/analysisReadiness.js";
+import { evaluateAnalysisReadiness, evaluateAnalysisReadinessForType } from "../../domain/analysis/analysisReadiness.js";
 import { normalizeAnalysisConfiguration } from "../../domain/analysis/analysisConfiguration.js";
+import {
+  ANALYSIS_TYPES,
+  analysisTypeLabel,
+  analysisUnits,
+  createDefaultAnalysisOptions,
+  getAnalysisDefinition,
+  normalizeAnalysisOptions,
+} from "../../domain/analysis/analysisRegistry.js";
 import { getOperatingCase, normalizeOperatingCases } from "../../domain/analysis/operatingCases.js";
 import {
-  createAnalysisResultIndex,
   formatCurrentA,
   formatPowerKw,
   formatReactivePowerKvar,
   formatResultNumber,
+  analysisResultViews,
+  getAnalysisNetworkResult,
+  getAnalysisResultView,
   parseAnalysisResultText,
-  voltagePuColor,
-  loadingColor,
 } from "../../domain/analysis/analysisResults.js";
 import { shallowEqual, useEditorActions, useEditorSelector } from "../../editor/EditorContext.jsx";
 import { useWorkspace } from "../../workspace/WorkspaceContext.jsx";
@@ -101,11 +109,11 @@ function OverviewTab({ document, validation, activeDiagram }) {
       <section className="analysis-section-card">
         <h3>Solicitud preparada</h3>
         <div className="read-only-grid">
-          <span>Análisis</span><strong>Flujo de carga AC balanceado</strong>
+          <span>Análisis por defecto</span><strong>{analysisTypeLabel(configuration.defaultAnalysisType)}</strong>
           <span>Caso por defecto</span><strong>{defaultCase.name}</strong>
           <span>Ejecución</span><strong>{configuration.defaultExecutionPreference}</strong>
           <span>Versión S3</span><strong>{activeDiagram?.storageVersion ?? "Sin sincronizar"}</strong>
-          <span>Unidades</span><strong>1 unidad estándar</strong>
+          <span>Unidades</span><strong>{analysisUnits(configuration.defaultAnalysisType)} unidad(es)</strong>
         </div>
         <p className="analysis-phase-note">
           El modelo puede guardarse y enviarse al solver desde la pestaña Ejecutar. Un resultado convergente puede activarse como capa visual, revisarse en tablas y consultarse dentro de cada componente.
@@ -306,6 +314,16 @@ function ConfigurationTab({ configuration, actions, canEdit }) {
       <section className="analysis-section-card">
         <h3>Configuración por defecto</h3>
         <label className="property-field">
+          <span>Análisis por defecto</span>
+          <select
+            disabled={!canEdit}
+            value={configuration.defaultAnalysisType}
+            onChange={(event) => actions.updateAnalysisConfiguration(null, { defaultAnalysisType: event.target.value })}
+          >
+            {ANALYSIS_TYPES.map((id) => <option key={id} value={id}>{analysisTypeLabel(id)}</option>)}
+          </select>
+        </label>
+        <label className="property-field">
           <span>Preferencia de ejecución</span>
           <select
             disabled={!canEdit}
@@ -320,7 +338,7 @@ function ConfigurationTab({ configuration, actions, canEdit }) {
       </section>
 
       <section className="analysis-section-card">
-        <h3>Solver de flujo de carga</h3>
+        <h3>Solver AC compartido</h3>
         <label className="property-field">
           <span>Algoritmo</span>
           <select disabled={!canEdit} value={solver.algorithm} onChange={(event) => actions.updateAnalysisConfiguration("solverOptions", { algorithm: event.target.value })}>
@@ -449,9 +467,137 @@ function statusTone(status) {
   return "progress";
 }
 
+function ToggleField({ checked, label, onChange }) {
+  return (
+    <label className="analysis-toggle-field">
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      <span>{label}</span>
+    </label>
+  );
+}
+
+function SelectionList({ title, items, selectedIds, onChange, emptyMessage }) {
+  const selected = new Set(selectedIds ?? []);
+  return (
+    <section className="analysis-option-group">
+      <div className="analysis-option-group__heading">
+        <strong>{title}</strong>
+        <button className="mini-button" type="button" onClick={() => onChange([])}>Todos</button>
+      </div>
+      {!items.length && <p className="analysis-phase-note">{emptyMessage}</p>}
+      <div className="analysis-selection-list">
+        {items.map((item) => (
+          <label key={item.id}>
+            <input
+              type="checkbox"
+              checked={selected.has(item.id)}
+              onChange={(event) => {
+                const next = new Set(selected);
+                if (event.target.checked) next.add(item.id);
+                else next.delete(item.id);
+                onChange([...next]);
+              }}
+            />
+            <span>{item.label}</span>
+            <code>{item.id}</code>
+          </label>
+        ))}
+      </div>
+      <small>Sin selección explícita se incluyen todos los elementos compatibles.</small>
+    </section>
+  );
+}
+
+function AnalysisSpecificOptions({ analysisType, value, onChange, document, validation }) {
+  const patch = (next) => onChange(normalizeAnalysisOptions(analysisType, { ...value, ...next }));
+  const lineAndTransformers = validation.model.components
+    .filter((item) => ["LINE", "TRANSFORMER_2W"].includes(item.kind) && item.inService)
+    .map((item) => ({ id: item.id, label: `${item.name || item.id} · ${KIND_LABELS[item.kind] || item.kind}` }));
+  const loads = validation.model.components
+    .filter((item) => item.kind === "LOAD" && item.inService)
+    .map((item) => ({ id: item.id, label: item.name || item.id }));
+  const cases = normalizeOperatingCases(document.operatingCases)
+    .map((item) => ({ id: item.id, label: item.name }));
+
+  if (analysisType === "POWER_FLOW") {
+    return <p className="analysis-phase-note">Utiliza la configuración AC definida en la pestaña Solver.</p>;
+  }
+  if (analysisType === "DC_POWER_FLOW") {
+    return (
+      <div className="analysis-option-fields">
+        <ToggleField checked={value.calculateLineLoading !== false} label="Calcular cargabilidad aproximada de líneas" onChange={(checked) => patch({ calculateLineLoading: checked })} />
+        <p className="analysis-phase-note">El flujo DC aproxima ángulos y potencia activa. No calcula tensión reactiva ni pérdidas AC completas.</p>
+      </div>
+    );
+  }
+  if (analysisType === "CONTINGENCY_N_1") {
+    return (
+      <div className="analysis-option-fields">
+        <div className="analysis-inline-options">
+          <ToggleField checked={value.includeLines !== false} label="Incluir líneas" onChange={(checked) => patch({ includeLines: checked })} />
+          <ToggleField checked={value.includeTransformers !== false} label="Incluir transformadores" onChange={(checked) => patch({ includeTransformers: checked })} />
+        </div>
+        <SelectionList
+          title="Elementos contingenciables"
+          items={lineAndTransformers}
+          selectedIds={value.selectedComponentIds}
+          onChange={(selectedComponentIds) => patch({ selectedComponentIds })}
+          emptyMessage="No existen líneas o transformadores en servicio."
+        />
+        <div className="analysis-number-grid">
+          <label><span>Máximo de contingencias</span><input type="number" min="1" max="100" value={value.maximumContingencies} onChange={(event) => patch({ maximumContingencies: Number(event.target.value) })} /></label>
+          <label><span>Tensión mínima (p.u.)</span><input type="number" min="0.1" max="1.5" step="0.001" value={value.minimumVoltagePu} onChange={(event) => patch({ minimumVoltagePu: Number(event.target.value) })} /></label>
+          <label><span>Tensión máxima (p.u.)</span><input type="number" min="0.1" max="1.5" step="0.001" value={value.maximumVoltagePu} onChange={(event) => patch({ maximumVoltagePu: Number(event.target.value) })} /></label>
+          <label><span>Carga máxima (%)</span><input type="number" min="1" max="1000" step="1" value={value.maximumLoadingPercent} onChange={(event) => patch({ maximumLoadingPercent: Number(event.target.value) })} /></label>
+        </div>
+      </div>
+    );
+  }
+  if (analysisType === "OPERATING_CASE_SWEEP") {
+    return (
+      <div className="analysis-option-fields">
+        <SelectionList
+          title="Casos incluidos"
+          items={cases}
+          selectedIds={value.caseIds}
+          onChange={(caseIds) => patch({ caseIds })}
+          emptyMessage="El diagrama no contiene casos de operación."
+        />
+        <div className="analysis-number-grid">
+          <label><span>Tensión mínima (p.u.)</span><input type="number" step="0.001" value={value.minimumVoltagePu} onChange={(event) => patch({ minimumVoltagePu: Number(event.target.value) })} /></label>
+          <label><span>Tensión máxima (p.u.)</span><input type="number" step="0.001" value={value.maximumVoltagePu} onChange={(event) => patch({ maximumVoltagePu: Number(event.target.value) })} /></label>
+          <label><span>Carga máxima (%)</span><input type="number" step="1" value={value.maximumLoadingPercent} onChange={(event) => patch({ maximumLoadingPercent: Number(event.target.value) })} /></label>
+        </div>
+      </div>
+    );
+  }
+  if (analysisType === "LOADABILITY") {
+    return (
+      <div className="analysis-option-fields">
+        <SelectionList
+          title="Cargas escaladas"
+          items={loads}
+          selectedIds={value.selectedComponentIds}
+          onChange={(selectedComponentIds) => patch({ selectedComponentIds })}
+          emptyMessage="No existen cargas en servicio."
+        />
+        <div className="analysis-number-grid">
+          <label><span>Multiplicador inicial</span><input type="number" min="0.01" step="0.01" value={value.startMultiplier} onChange={(event) => patch({ startMultiplier: Number(event.target.value) })} /></label>
+          <label><span>Multiplicador máximo</span><input type="number" min="0.01" step="0.05" value={value.maximumMultiplier} onChange={(event) => patch({ maximumMultiplier: Number(event.target.value) })} /></label>
+          <label><span>Incremento</span><input type="number" min="0.001" step="0.01" value={value.step} onChange={(event) => patch({ step: Number(event.target.value) })} /></label>
+          <label><span>Tensión mínima (p.u.)</span><input type="number" step="0.001" value={value.minimumVoltagePu} onChange={(event) => patch({ minimumVoltagePu: Number(event.target.value) })} /></label>
+          <label><span>Tensión máxima (p.u.)</span><input type="number" step="0.001" value={value.maximumVoltagePu} onChange={(event) => patch({ maximumVoltagePu: Number(event.target.value) })} /></label>
+          <label><span>Carga máxima (%)</span><input type="number" step="1" value={value.maximumLoadingPercent} onChange={(event) => patch({ maximumLoadingPercent: Number(event.target.value) })} /></label>
+        </div>
+        <ToggleField checked={value.stopAtFirstViolation !== false} label="Detener en la primera violación" onChange={(checked) => patch({ stopAtFirstViolation: checked })} />
+      </div>
+    );
+  }
+  return null;
+}
+
 function ExecutionTab({
   document,
-  validation,
   configuration,
   activeProject,
   activeDiagram,
@@ -460,9 +606,10 @@ function ExecutionTab({
 }) {
   const cases = normalizeOperatingCases(document.operatingCases);
   const defaultCase = cases.find((item) => item.isDefault) ?? cases[0];
-  const defaultPreference = configuration.defaultExecutionPreference === "ADVANCED"
-    ? "AUTO"
-    : configuration.defaultExecutionPreference;
+  const defaultPreference = configuration.defaultExecutionPreference === "ADVANCED" ? "AUTO" : configuration.defaultExecutionPreference;
+  const initialType = ANALYSIS_TYPES.includes(configuration.defaultAnalysisType) ? configuration.defaultAnalysisType : "POWER_FLOW";
+  const [analysisType, setAnalysisType] = useState(initialType);
+  const [analysisOptions, setAnalysisOptions] = useState(() => createDefaultAnalysisOptions(initialType));
   const [selectedCaseId, setSelectedCaseId] = useState(defaultCase.id);
   const [executionPreference, setExecutionPreference] = useState(defaultPreference);
   const [studyName, setStudyName] = useState("");
@@ -475,11 +622,21 @@ function ExecutionTab({
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
+  const validation = useMemo(
+    () => evaluateAnalysisReadinessForType(document, analysisType, analysisOptions),
+    [document, analysisType, analysisOptions],
+  );
+  const definition = getAnalysisDefinition(analysisType);
+
   useEffect(() => {
-    if (!cases.some((item) => item.id === selectedCaseId)) {
-      setSelectedCaseId(defaultCase.id);
-    }
+    if (!cases.some((item) => item.id === selectedCaseId)) setSelectedCaseId(defaultCase.id);
   }, [cases, defaultCase.id, selectedCaseId]);
+
+  const changeType = (nextType) => {
+    setAnalysisType(nextType);
+    setAnalysisOptions(createDefaultAnalysisOptions(nextType));
+    setStudyName("");
+  };
 
   const refreshHistory = useCallback(async () => {
     if (!activeDiagram?.id) return [];
@@ -522,15 +679,11 @@ function ExecutionTab({
       setArtifactText(loaded.text);
       if (type === "RESULT") {
         const parsed = parseAnalysisResultText(loaded.text);
-        if (parsed.diagramId !== activeDiagram?.id) {
-          throw new Error("El resultado pertenece a otro diagrama y no puede activarse en esta vista.");
-        }
+        if (parsed.diagramId !== activeDiagram?.id) throw new Error("El resultado pertenece a otro diagrama.");
         if (activate) {
           editorActions.activateAnalysisResult(study, parsed);
           setMessage("Resultado activo sobre el diagrama.");
-        } else {
-          setMessage("result.json descargado desde S3.");
-        }
+        } else setMessage("result.json descargado desde S3.");
         return parsed;
       }
       setMessage(`${type.toLowerCase()} descargado desde S3.`);
@@ -547,7 +700,6 @@ function ExecutionTab({
     const studyId = currentStudy?.id;
     const status = currentStudy?.status;
     if (!studyId || TERMINAL_ANALYSIS_STATUSES.has(status)) return undefined;
-
     let cancelled = false;
     const poll = async () => {
       try {
@@ -561,23 +713,15 @@ function ExecutionTab({
           await refreshHistory();
           if (["CONVERGED", "NOT_CONVERGED"].includes(updated.status) && updated.resultStorageKey) {
             await loadArtifact(updated, "RESULT", { activate: true });
-          } else if (updated.diagnosticsStorageKey) {
-            await loadArtifact(updated, "DIAGNOSTICS");
-          }
+          } else if (updated.diagnosticsStorageKey) await loadArtifact(updated, "DIAGNOSTICS");
         }
       } catch (nextError) {
-        if (!cancelled) {
-          setError(nextError instanceof Error ? nextError.message : String(nextError));
-        }
+        if (!cancelled) setError(nextError instanceof Error ? nextError.message : String(nextError));
       }
     };
-
     const timer = window.setInterval(poll, 2500);
     poll();
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
+    return () => { cancelled = true; window.clearInterval(timer); };
   }, [currentStudy?.id, currentStudy?.status, loadArtifact, refreshHistory]);
 
   const runAnalysis = async () => {
@@ -587,18 +731,15 @@ function ExecutionTab({
     setMessage("Guardando la versión actual del diagrama…");
     try {
       editorActions.setPersistence("saving", "Guardando antes del análisis");
-      const saved = await workspaceActions.saveDiagramDocument(
-        activeProject.id,
-        activeDiagram.id,
-        document,
-      );
+      const saved = await workspaceActions.saveDiagramDocument(activeProject.id, activeDiagram.id, document);
       editorActions.setPersistence("saved", "Guardado en la nube");
       setMessage("Creando el estudio y enviándolo al solver…");
-
+      const normalizedOptions = normalizeAnalysisOptions(analysisType, analysisOptions);
       const request = await startAnalysisService({
         diagramId: activeDiagram.id,
         operatingCaseId: selectedCaseId,
-        analysisType: "POWER_FLOW",
+        analysisType,
+        analysisOptionsJson: JSON.stringify(normalizedOptions),
         executionPreference,
         expectedDiagramVersion: Number(saved.storageVersion),
         clientRequestId: createAnalysisClientRequestId(),
@@ -617,31 +758,26 @@ function ExecutionTab({
   };
 
   const selectedCase = getOperatingCase(document, selectedCaseId);
-  const canRun = Boolean(
-    activeProject?.canEdit &&
-    activeDiagram?.id &&
-    validation.readiness !== "NOT_READY" &&
-    !busy,
-  );
+  const canRun = Boolean(activeProject?.canEdit && activeDiagram?.id && validation.readiness !== "NOT_READY" && !busy);
   const status = currentStudy?.status;
-  const isTerminal = Boolean(status && TERMINAL_ANALYSIS_STATUSES.has(status));
 
   return (
     <div className="analysis-tab-content">
-      <AnalysisSummary validation={validation} />
-
       <section className="analysis-section-card analysis-run-card">
-        <h3>Ejecutar flujo de carga</h3>
+        <h3>Nuevo estudio</h3>
+        <label className="property-field">
+          <span>Tipo de análisis</span>
+          <select value={analysisType} onChange={(event) => changeType(event.target.value)}>
+            {ANALYSIS_TYPES.map((id) => <option key={id} value={id}>{analysisTypeLabel(id)}</option>)}
+          </select>
+        </label>
+        <p className="analysis-phase-note">{definition.description}</p>
         <label className="property-field">
           <span>Nombre del estudio</span>
-          <input
-            value={studyName}
-            onChange={(event) => setStudyName(event.target.value)}
-            placeholder={`Flujo de carga · ${document.name}`}
-          />
+          <input value={studyName} onChange={(event) => setStudyName(event.target.value)} placeholder={`${definition.shortLabel} · ${document.name}`} />
         </label>
         <label className="property-field">
-          <span>Caso de operación</span>
+          <span>Caso base</span>
           <select value={selectedCase.id} onChange={(event) => setSelectedCaseId(event.target.value)}>
             {cases.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
@@ -653,11 +789,13 @@ function ExecutionTab({
             <option value="STANDARD">Estándar · Lambda</option>
           </select>
         </label>
+        <AnalysisSpecificOptions analysisType={analysisType} value={analysisOptions} onChange={setAnalysisOptions} document={document} validation={validation} />
+        <AnalysisSummary validation={validation} />
         <div className="read-only-grid analysis-run-summary">
-          <span>Análisis</span><strong>POWER_FLOW</strong>
-          <span>Algoritmo</span><strong>{configuration.solverOptions.algorithm}</strong>
+          <span>Análisis</span><strong>{analysisType}</strong>
           <span>Versión actual</span><strong>{activeDiagram?.storageVersion ?? 0}</strong>
-          <span>Unidades reservadas</span><strong>1</strong>
+          <span>Unidades reservadas</span><strong>{analysisUnits(analysisType)}</strong>
+          <span>Proveedor</span><strong>Lambda Docker</strong>
         </div>
         <button className="button button--primary analysis-run-button" type="button" disabled={!canRun} onClick={runAnalysis}>
           {busy ? "Procesando…" : "Guardar y ejecutar análisis"}
@@ -666,122 +804,74 @@ function ExecutionTab({
         {validation.readiness === "NOT_READY" && <p className="analysis-phase-note analysis-phase-note--error">Corrige los errores bloqueantes antes de ejecutar.</p>}
       </section>
 
-      {(message || error) && (
-        <section className={`analysis-operation-message ${error ? "analysis-operation-message--error" : ""}`}>
-          {error || message}
-        </section>
-      )}
+      {(message || error) && <section className={`analysis-operation-message ${error ? "analysis-operation-message--error" : ""}`}>{error || message}</section>}
 
       {currentStudy && (
         <section className="analysis-section-card">
           <div className="analysis-study-heading">
-            <div>
-              <h3>Estudio actual</h3>
-              <code>{currentStudy.id}</code>
-            </div>
-            <span className={`analysis-status analysis-status--${statusTone(currentStudy.status)}`}>
-              {ANALYSIS_STATUS_LABELS[currentStudy.status] ?? currentStudy.status}
-            </span>
+            <div><h3>Estudio actual</h3><code>{currentStudy.id}</code></div>
+            <span className={`analysis-status analysis-status--${statusTone(currentStudy.status)}`}>{ANALYSIS_STATUS_LABELS[currentStudy.status] ?? currentStudy.status}</span>
           </div>
           <div className="read-only-grid">
+            <span>Tipo</span><strong>{analysisTypeLabel(currentStudy.analysisType)}</strong>
             <span>Solicitado</span><strong>{formatStudyDate(currentStudy.requestedAt)}</strong>
             <span>Inicio</span><strong>{formatStudyDate(currentStudy.startedAt)}</strong>
             <span>Término</span><strong>{formatStudyDate(currentStudy.completedAt)}</strong>
-            <span>Motor</span><strong>{currentStudy.engineName || "Pendiente"} {currentStudy.engineVersion || ""}</strong>
-            <span>Fallo</span><strong>{currentStudy.failureCode || "—"}</strong>
+            <span>Motor</span><strong>{currentStudy.engineName || "—"} {currentStudy.engineVersion || ""}</strong>
+            <span>Unidades</span><strong>{currentStudy.consumedUnits ?? currentStudy.reservedUnits ?? 0}</strong>
           </div>
-          {currentStudy.failureMessage && (
-            <p className="analysis-study-failure">{currentStudy.failureMessage}</p>
-          )}
-          <div className="analysis-toolbar-row analysis-artifact-actions">
-            <button className="button button--soft" type="button" onClick={() => showStudy(currentStudy)}>Registro</button>
-            <button className="button button--soft" type="button" disabled={!currentStudy.inputStorageKey || busy} onClick={() => loadArtifact(currentStudy, "INPUT")}>Input</button>
-            <button className="button button--soft" type="button" disabled={!isTerminal || !currentStudy.resultStorageKey || busy} onClick={() => loadArtifact(currentStudy, "RESULT")}>Resultado</button>
-            <button className="button button--primary" type="button" disabled={!isTerminal || !currentStudy.resultStorageKey || busy} onClick={() => loadArtifact(currentStudy, "RESULT", { activate: true })}>Activar en diagrama</button>
-            <button className="button button--soft" type="button" disabled={!isTerminal || !currentStudy.diagnosticsStorageKey || busy} onClick={() => loadArtifact(currentStudy, "DIAGNOSTICS")}>Diagnóstico</button>
+          {currentStudy.failureMessage && <p className="analysis-phase-note analysis-phase-note--error">{currentStudy.failureCode}: {currentStudy.failureMessage}</p>}
+          <div className="analysis-artifact-actions">
+            <button type="button" onClick={() => showStudy(currentStudy)}>Registro</button>
+            <button type="button" disabled={busy || !currentStudy.inputStorageKey} onClick={() => loadArtifact(currentStudy, "INPUT")}>input.json</button>
+            <button type="button" disabled={busy || !currentStudy.resultStorageKey} onClick={() => loadArtifact(currentStudy, "RESULT", { activate: true })}>Mostrar resultado</button>
+            <button type="button" disabled={busy || !currentStudy.diagnosticsStorageKey} onClick={() => loadArtifact(currentStudy, "DIAGNOSTICS")}>Diagnóstico</button>
           </div>
-        </section>
-      )}
-
-      {artifactText && (
-        <section className="analysis-section-card analysis-raw-result">
-          <div className="analysis-raw-result-header">
-            <h3>Contenido crudo · {artifactType}</h3>
-            <button
-              className="button button--soft"
-              type="button"
-              onClick={() => downloadTextFile(
-                `${safeFilename(document.name)}-${currentStudy?.id || "analysis"}-${artifactType.toLowerCase()}.json`,
-                artifactText,
-              )}
-            >
-              Descargar
-            </button>
-          </div>
-          <pre className="analysis-code-preview analysis-code-preview--result">{artifactText}</pre>
         </section>
       )}
 
       <section className="analysis-section-card">
-        <div className="analysis-history-heading">
-          <h3>Estudios recientes</h3>
-          <button className="mini-button" type="button" disabled={historyLoading} onClick={refreshHistory} title="Actualizar historial">↻</button>
-        </div>
-        <div className="analysis-study-list">
+        <div className="analysis-study-heading"><h3>Estudios recientes</h3><button className="mini-button" type="button" disabled={historyLoading} onClick={refreshHistory}>↻</button></div>
+        <div className="analysis-history-list">
           {history.map((study) => (
-            <div key={study.id} className={currentStudy?.id === study.id ? "active" : ""}>
-              <button type="button" className="analysis-study-main" onClick={() => showStudy(study)}>
-                <span className={`analysis-status analysis-status--${statusTone(study.status)}`}>{ANALYSIS_STATUS_LABELS[study.status] ?? study.status}</span>
-                <strong>{study.name || "Flujo de carga"}</strong>
-                <small>{formatStudyDate(study.requestedAt)}</small>
+            <div key={study.id} className="analysis-history-row">
+              <button type="button" onClick={() => showStudy(study)}>
+                <strong>{study.name || analysisTypeLabel(study.analysisType)}</strong>
+                <span>{analysisTypeLabel(study.analysisType)} · {formatStudyDate(study.requestedAt)}</span>
               </button>
-              {study.resultStorageKey && ["CONVERGED", "NOT_CONVERGED"].includes(study.status) && (
-                <button
-                  className="analysis-study-activate"
-                  type="button"
-                  disabled={busy}
-                  onClick={() => {
-                    showStudy(study);
-                    loadArtifact(study, "RESULT", { activate: true });
-                  }}
-                >
-                  Mostrar
-                </button>
-              )}
+              <span className={`analysis-status analysis-status--${statusTone(study.status)}`}>{ANALYSIS_STATUS_LABELS[study.status] ?? study.status}</span>
+              {study.resultStorageKey && <button className="mini-button" type="button" onClick={() => loadArtifact(study, "RESULT", { activate: true })}>Mostrar</button>}
             </div>
           ))}
-          {!historyLoading && !history.length && <p>No existen estudios para este diagrama.</p>}
-          {historyLoading && <p>Cargando historial…</p>}
+          {!historyLoading && !history.length && <p className="analysis-phase-note">Todavía no existen estudios para este diagrama.</p>}
         </div>
       </section>
+
+      {artifactText && (
+        <section className="analysis-section-card analysis-section-card--wide">
+          <div className="analysis-study-heading"><h3>{artifactType}</h3><button className="mini-button" type="button" onClick={() => downloadTextFile(`${safeFilename(currentStudy?.name || "analysis")}-${artifactType.toLowerCase()}.json`, artifactText)}>↓</button></div>
+          <pre className="analysis-code-preview analysis-code-preview--result">{artifactText}</pre>
+        </section>
+      )}
     </div>
   );
 }
 
 function OverlayOption({ checked, label, onChange }) {
-  return (
-    <label className="analysis-overlay-option">
-      <input type="checkbox" checked={Boolean(checked)} onChange={(event) => onChange(event.target.checked)} />
-      <span>{label}</span>
-    </label>
-  );
+  return <ToggleField checked={checked} label={label} onChange={onChange} />;
 }
 
 function ResultTable({ columns, rows, emptyMessage }) {
-  if (!rows.length) return <p className="analysis-empty-result">{emptyMessage}</p>;
+  if (!rows.length) return <p className="analysis-phase-note">{emptyMessage}</p>;
   return (
-    <div className="analysis-results-table-wrap">
-      <table className="analysis-results-table">
-        <thead>
-          <tr>{columns.map((column) => <th key={column.key}>{column.label}</th>)}</tr>
-        </thead>
-        <tbody>
-          {rows.map((row, rowIndex) => (
-            <tr key={row.componentId || row.connectionNodeId || row.busId || `${row.code}-${rowIndex}`}>
-              {columns.map((column) => <td key={column.key}>{column.render ? column.render(row) : row[column.key] ?? "—"}</td>)}
-            </tr>
-          ))}
-        </tbody>
+    <div className="analysis-result-table-wrap">
+      <table className="analysis-result-table">
+        <thead><tr>{columns.map((column) => <th key={column.key}>{column.label}</th>)}</tr></thead>
+        <tbody>{rows.map((row, index) => (
+          <tr key={row.componentId || row.busId || row.operatingCaseId || row.multiplier || index}>
+            {columns.map((column) => <td key={column.key}>{column.render ? column.render(row) : row[column.key] ?? "—"}</td>)}
+          </tr>
+        ))}</tbody>
       </table>
     </div>
   );
@@ -796,71 +886,74 @@ const RESULT_CATEGORIES = [
   ["warnings", "Advertencias"],
 ];
 
+function AnalysisScenarioTable({ result, actions }) {
+  if (result.analysisType === "CONTINGENCY_N_1") {
+    return <ResultTable columns={[
+      { key: "componentId", label: "Elemento" },
+      { key: "status", label: "Estado" },
+      { key: "violationCount", label: "Violaciones" },
+      { key: "minimumVoltagePu", label: "V mínima", render: (row) => formatResultNumber(row.summary?.minimumVoltagePu, 4) },
+      { key: "maximumLoadingPercent", label: "Carga máxima", render: (row) => `${formatResultNumber(row.summary?.maximumLoadingPercent, 2)} %` },
+      { key: "show", label: "Vista", render: (row) => row.networkResult ? <button type="button" className="mini-button" onClick={() => actions.setAnalysisResultView(`contingency:${row.componentId}`)}>Mostrar</button> : "—" },
+    ]} rows={result.contingencies} emptyMessage="No existen contingencias." />;
+  }
+  if (result.analysisType === "OPERATING_CASE_SWEEP") {
+    return <ResultTable columns={[
+      { key: "name", label: "Caso" },
+      { key: "status", label: "Estado" },
+      { key: "violationCount", label: "Violaciones" },
+      { key: "minimumVoltagePu", label: "V mínima", render: (row) => formatResultNumber(row.summary?.minimumVoltagePu, 4) },
+      { key: "maximumLoadingPercent", label: "Carga máxima", render: (row) => `${formatResultNumber(row.summary?.maximumLoadingPercent, 2)} %` },
+      { key: "show", label: "Vista", render: (row) => row.networkResult ? <button type="button" className="mini-button" onClick={() => actions.setAnalysisResultView(`case:${row.operatingCaseId}`)}>Mostrar</button> : "—" },
+    ]} rows={result.cases} emptyMessage="No existen casos ejecutados." />;
+  }
+  if (result.analysisType === "LOADABILITY") {
+    return <ResultTable columns={[
+      { key: "multiplier", label: "Multiplicador", render: (row) => `×${formatResultNumber(row.multiplier, 3)}` },
+      { key: "status", label: "Estado" },
+      { key: "violationCount", label: "Violaciones" },
+      { key: "minimumVoltagePu", label: "V mínima", render: (row) => formatResultNumber(row.summary?.minimumVoltagePu, 4) },
+      { key: "maximumLoadingPercent", label: "Carga máxima", render: (row) => `${formatResultNumber(row.summary?.maximumLoadingPercent, 2)} %` },
+    ]} rows={result.steps} emptyMessage="No existen pasos de cargabilidad." />;
+  }
+  return null;
+}
+
 function ResultsTab({ overlay, actions, activeDiagram, document }) {
   const [category, setCategory] = useState("buses");
-  const result = overlay?.result;
-  const options = overlay?.options ?? {};
-  const resultIndex = useMemo(
-    () => (result && document ? createAnalysisResultIndex(document, result) : null),
-    [document, result],
-  );
-  if (!result) {
-    return (
-      <div className="analysis-tab-content">
-        <section className="analysis-section-card analysis-empty-active-study">
-          <h3>No hay un estudio activo</h3>
-          <p>Abre la pestaña Ejecutar y activa el resultado de un estudio convergente. Los resultados se descargarán desde S3 y se montarán sobre este mismo diagrama.</p>
-        </section>
-      </div>
-    );
+  const rawResult = overlay?.result;
+  if (!rawResult) {
+    return <div className="analysis-tab-content"><section className="analysis-empty-result"><strong>No hay resultados activos</strong><span>Ejecuta o selecciona un estudio convergente.</span></section></div>;
   }
-
-  const summary = result.summary ?? {};
-  const rows = Array.isArray(result[category]) ? result[category] : [];
-  const componentLabel = (componentId) => {
-    const entity = document?.nodes?.[componentId] ?? document?.edges?.[componentId];
-    return entity?.properties?.name ? `${entity.properties.name} · ${componentId}` : componentId || "—";
-  };
-  const busLabel = (row) => {
-    const connectionNode = resultIndex?.connectionNodeById.get(row.connectionNodeId)
-      ?? resultIndex?.connectionNodeById.get(row.busId)
-      ?? resultIndex?.connectionNodeByBusComponentId.get(row.busId);
-    const visualNodeId = connectionNode?.busComponentId || (document?.nodes?.[row.busId] ? row.busId : null);
-    const visualNode = visualNodeId ? document?.nodes?.[visualNodeId] : null;
-    return visualNode?.properties?.name
-      ? `${visualNode.properties.name} · ${row.busId}`
-      : row.busId || row.connectionNodeId || "—";
-  };
-  const resultVersion = Number(result.diagramStorageVersion ?? overlay.study?.inputDiagramVersion);
-  const currentVersion = Number(activeDiagram?.storageVersion);
-  const versionMismatch = Number.isFinite(resultVersion)
-    && Number.isFinite(currentVersion)
-    && resultVersion !== currentVersion;
+  const result = rawResult;
+  const views = analysisResultViews(result);
+  const view = getAnalysisResultView(result, overlay.viewId);
+  const network = getAnalysisNetworkResult(result, overlay.viewId);
+  const options = overlay.options ?? {};
+  const summary = network.summary ?? result.summary ?? {};
+  const currentVersion = Number(activeDiagram?.storageVersion ?? 0);
+  const resultVersion = Number(result.diagramStorageVersion ?? overlay.study?.inputDiagramVersion ?? 0);
+  const versionMismatch = Boolean(currentVersion && resultVersion && currentVersion !== resultVersion);
+  const componentLabel = (id) => document.nodes?.[id]?.properties?.name || document.edges?.[id]?.properties?.name || id;
+  const rows = network[category] ?? [];
   const columnsByCategory = {
     buses: [
-      { key: "status", label: "", render: (row) => <span className="analysis-result-color-dot" style={{ background: voltagePuColor(row.voltagePu, row.status) }} title={row.status} /> },
-      { key: "busId", label: "Barra", render: busLabel },
+      { key: "busId", label: "Barra", render: (row) => componentLabel(row.busId) },
+      { key: "voltagePu", label: "V p.u.", render: (row) => formatResultNumber(row.voltagePu, 5) },
       { key: "voltageKv", label: "kV", render: (row) => formatResultNumber(row.voltageKv, 3) },
-      { key: "voltagePu", label: "p.u.", render: (row) => formatResultNumber(row.voltagePu, 4) },
-      { key: "angleDeg", label: "Ángulo", render: (row) => `${formatResultNumber(row.angleDeg, 3)}°` },
-      { key: "activePowerInjectionKw", label: "P inyección", render: (row) => formatPowerKw(row.activePowerInjectionKw) },
-      { key: "reactivePowerInjectionKvar", label: "Q inyección", render: (row) => formatReactivePowerKvar(row.reactivePowerInjectionKvar) },
-      { key: "statusText", label: "Estado", render: (row) => row.status || "—" },
+      { key: "angleDeg", label: "Ángulo", render: (row) => `${formatResultNumber(row.angleDeg, 4)}°` },
+      { key: "status", label: "Estado" },
     ],
     branches: [
-      { key: "status", label: "", render: (row) => <span className="analysis-result-color-dot" style={{ background: loadingColor(row.loadingPercent, row.status) }} title={row.status} /> },
       { key: "componentId", label: "Línea", render: (row) => componentLabel(row.componentId) },
       { key: "activePowerFromKw", label: "P origen", render: (row) => formatPowerKw(row.activePowerFromKw) },
-      { key: "reactivePowerFromKvar", label: "Q origen", render: (row) => formatReactivePowerKvar(row.reactivePowerFromKvar) },
-      { key: "currentFromA", label: "Corriente", render: (row) => formatCurrentA(row.currentFromA) },
+      { key: "currentFromA", label: "I", render: (row) => formatCurrentA(row.currentFromA) },
       { key: "loadingPercent", label: "Carga", render: (row) => `${formatResultNumber(row.loadingPercent, 2)} %` },
       { key: "activeLossKw", label: "Pérdidas", render: (row) => formatPowerKw(row.activeLossKw) },
       { key: "direction", label: "Dirección" },
     ],
     transformers: [
       { key: "componentId", label: "Transformador", render: (row) => componentLabel(row.componentId) },
-      { key: "primaryVoltageKv", label: "Primario", render: (row) => `${formatResultNumber(row.primaryVoltageKv, 3)} kV` },
-      { key: "secondaryVoltageKv", label: "Secundario", render: (row) => `${formatResultNumber(row.secondaryVoltageKv, 3)} kV` },
       { key: "activePowerPrimaryKw", label: "P primario", render: (row) => formatPowerKw(row.activePowerPrimaryKw) },
       { key: "loadingPercent", label: "Carga", render: (row) => `${formatResultNumber(row.loadingPercent, 2)} %` },
       { key: "tapPosition", label: "Tap" },
@@ -871,15 +964,12 @@ function ResultsTab({ overlay, actions, activeDiagram, document }) {
       { key: "controlMode", label: "Control" },
       { key: "activePowerKw", label: "P", render: (row) => formatPowerKw(row.activePowerKw) },
       { key: "reactivePowerKvar", label: "Q", render: (row) => formatReactivePowerKvar(row.reactivePowerKvar) },
-      { key: "voltagePu", label: "Tensión", render: (row) => row.voltagePu == null ? "—" : `${formatResultNumber(row.voltagePu, 4)} p.u.` },
-      { key: "inService", label: "Servicio", render: (row) => row.inService ? "Sí" : "No" },
     ],
     loads: [
       { key: "componentId", label: "Carga", render: (row) => componentLabel(row.componentId) },
       { key: "activePowerKw", label: "P", render: (row) => formatPowerKw(row.activePowerKw) },
       { key: "reactivePowerKvar", label: "Q", render: (row) => formatReactivePowerKvar(row.reactivePowerKvar) },
       { key: "busId", label: "Barra" },
-      { key: "inService", label: "Servicio", render: (row) => row.inService ? "Sí" : "No" },
     ],
     warnings: [
       { key: "code", label: "Código" },
@@ -892,28 +982,27 @@ function ResultsTab({ overlay, actions, activeDiagram, document }) {
     <div className="analysis-tab-content">
       <section className="analysis-section-card analysis-active-result-card">
         <div className="analysis-study-heading">
-          <div>
-            <span className="eyebrow">Resultado activo</span>
-            <h3>{overlay.study?.name || "Flujo de carga"}</h3>
-            <code>{result.studyId}</code>
-          </div>
+          <div><span className="eyebrow">Resultado activo</span><h3>{overlay.study?.name || analysisTypeLabel(result.analysisType)}</h3><code>{result.studyId}</code></div>
           <button className="mini-button danger-outline" type="button" onClick={actions.clearActiveAnalysisResult} title="Quitar resultados">×</button>
         </div>
         <div className="read-only-grid">
-          <span>Caso</span><strong>{result.operatingCaseId || overlay.study?.operatingCaseId || "—"}</strong>
-          <span>Versión</span><strong>{result.diagramStorageVersion ?? overlay.study?.inputDiagramVersion ?? "—"}</strong>
+          <span>Tipo</span><strong>{analysisTypeLabel(result.analysisType)}</strong>
+          <span>Vista activa</span><strong>{view?.label || "—"}</strong>
+          <span>Versión</span><strong>{resultVersion || "—"}</strong>
           <span>Motor</span><strong>{result.engine?.name || overlay.study?.engineName || "—"} {result.engine?.version || ""}</strong>
           <span>Convergencia</span><strong>{result.convergence?.converged ? "Convergió" : "No convergió"}</strong>
-          <span>Iteraciones</span><strong>{result.convergence?.iterations ?? "—"}</strong>
           <span>Duración</span><strong>{result.convergence?.durationMs != null ? `${formatResultNumber(result.convergence.durationMs, 0)} ms` : "—"}</strong>
         </div>
       </section>
 
-      {versionMismatch && (
-        <section className="analysis-operation-message analysis-operation-message--warning">
-          Este estudio fue calculado con la versión {resultVersion}, mientras el diagrama actual está en la versión {currentVersion}. Se muestran los resultados sobre los IDs que todavía existen.
+      {views.length > 1 && (
+        <section className="analysis-section-card">
+          <label className="property-field"><span>Escenario mostrado en el diagrama</span><select value={view?.id || ""} onChange={(event) => actions.setAnalysisResultView(event.target.value)}>{views.map((item) => <option key={item.id} value={item.id}>{item.label}</option>)}</select></label>
+          <p className="analysis-phase-note">{view?.description}</p>
         </section>
       )}
+
+      {versionMismatch && <section className="analysis-operation-message analysis-operation-message--warning">Este estudio usa la versión {resultVersion}; el diagrama actual está en la versión {currentVersion}. Sólo se muestran IDs que aún existen.</section>}
 
       <div className="analysis-stat-grid analysis-result-summary-grid">
         <div><span>Tensión mínima</span><strong>{formatResultNumber(summary.minimumVoltagePu, 4)} p.u.</strong></div>
@@ -925,12 +1014,13 @@ function ResultsTab({ overlay, actions, activeDiagram, document }) {
       </div>
 
       <section className="analysis-section-card">
-        <h3>Capa visual</h3>
+        <div className="analysis-study-heading"><h3>Capa visual</h3><button className="mini-button" type="button" onClick={actions.resetAnalysisResultLabelLayout}>Restablecer cajas</button></div>
+        <p className="analysis-phase-note">Las cajas son compactas, se expanden al pasar el cursor y pueden arrastrarse. Su posición queda guardada por estudio y se reutiliza al volver a activarlo.</p>
         <div className="analysis-overlay-controls">
           <OverlayOption checked={options.visible} label="Mostrar resultados" onChange={(value) => actions.updateAnalysisOverlayOptions({ visible: value })} />
           <OverlayOption checked={options.colorBusesByVoltage} label="Colorear barras por tensión" onChange={(value) => actions.updateAnalysisOverlayOptions({ colorBusesByVoltage: value })} />
           <OverlayOption checked={options.colorBranchesByLoading} label="Colorear líneas por carga" onChange={(value) => actions.updateAnalysisOverlayOptions({ colorBranchesByLoading: value })} />
-          <OverlayOption checked={options.showBusVoltages} label="Tensiones de barras" onChange={(value) => actions.updateAnalysisOverlayOptions({ showBusVoltages: value })} />
+          <OverlayOption checked={options.showBusVoltages} label="Tensiones" onChange={(value) => actions.updateAnalysisOverlayOptions({ showBusVoltages: value })} />
           <OverlayOption checked={options.showBusAngles} label="Ángulos" onChange={(value) => actions.updateAnalysisOverlayOptions({ showBusAngles: value })} />
           <OverlayOption checked={options.showActivePowerFlows} label="Potencia activa" onChange={(value) => actions.updateAnalysisOverlayOptions({ showActivePowerFlows: value })} />
           <OverlayOption checked={options.showReactivePowerFlows} label="Potencia reactiva" onChange={(value) => actions.updateAnalysisOverlayOptions({ showReactivePowerFlows: value })} />
@@ -940,79 +1030,38 @@ function ResultsTab({ overlay, actions, activeDiagram, document }) {
           <OverlayOption checked={options.showFlowArrows} label="Flechas de flujo" onChange={(value) => actions.updateAnalysisOverlayOptions({ showFlowArrows: value })} />
           <OverlayOption checked={options.showEquipmentPower} label="Potencia en equipos" onChange={(value) => actions.updateAnalysisOverlayOptions({ showEquipmentPower: value })} />
         </div>
-        <div className="analysis-voltage-legend" aria-label="Escala de tensión por unidad">
-          <span style={{ background: "#dc2626" }}>≤ 0,90</span>
-          <span style={{ background: "#f97316" }}>0,90–0,95</span>
-          <span style={{ background: "#eab308" }}>0,95–0,98</span>
-          <span style={{ background: "#16a34a" }}>0,98–1,02</span>
-          <span style={{ background: "#0284c7" }}>1,02–1,05</span>
-          <span style={{ background: "#7c3aed" }}>&gt; 1,05</span>
-        </div>
       </section>
+
+      {["CONTINGENCY_N_1", "OPERATING_CASE_SWEEP", "LOADABILITY"].includes(result.analysisType) && (
+        <section className="analysis-section-card analysis-section-card--wide"><h3>Resumen de escenarios</h3><AnalysisScenarioTable result={result} actions={actions} /></section>
+      )}
 
       <section className="analysis-section-card analysis-section-card--wide">
         <div className="analysis-result-category-tabs">
-          {RESULT_CATEGORIES.map(([id, label]) => (
-            <button key={id} type="button" className={category === id ? "active" : ""} onClick={() => setCategory(id)}>
-              {label} <small>{Array.isArray(result[id]) ? result[id].length : 0}</small>
-            </button>
-          ))}
+          {RESULT_CATEGORIES.map(([id, label]) => <button key={id} type="button" className={category === id ? "active" : ""} onClick={() => setCategory(id)}>{label} <small>{Array.isArray(network[id]) ? network[id].length : 0}</small></button>)}
         </div>
-        <ResultTable
-          columns={columnsByCategory[category]}
-          rows={rows}
-          emptyMessage={`No existen resultados de ${RESULT_CATEGORIES.find(([id]) => id === category)?.[1].toLowerCase()} en este estudio.`}
-        />
+        <ResultTable columns={columnsByCategory[category]} rows={rows} emptyMessage={`No existen resultados de ${RESULT_CATEGORIES.find(([id]) => id === category)?.[1].toLowerCase()} en esta vista.`} />
       </section>
     </div>
   );
 }
 
 export default function AnalysisPanel() {
-  const editorData = useEditorSelector((state) => ({
-    document: state.document,
-    analysisOverlay: state.ui.analysisOverlay,
-  }), shallowEqual);
+  const editorData = useEditorSelector((state) => ({ document: state.document, analysisOverlay: state.ui.analysisOverlay }), shallowEqual);
   const document = editorData.document;
   const editorActions = useEditorActions();
-  const {
-    activeProject,
-    activeDiagram,
-    actions: workspaceActions,
-  } = useWorkspace();
+  const { activeProject, activeDiagram, actions: workspaceActions } = useWorkspace();
   const [tab, setTab] = useState("execute");
   const validation = useMemo(() => evaluateAnalysisReadiness(document), [document]);
   const configuration = normalizeAnalysisConfiguration(document.analysisConfiguration);
 
   return (
     <aside className="properties-panel analysis-panel">
-      <div className="panel-header analysis-panel-header">
-        <div><span className="eyebrow">Ejecución y datos</span><h2>Análisis eléctricos</h2></div>
-        <button className="mini-button" type="button" onClick={editorActions.closeAnalysisPanel} title="Volver a propiedades">×</button>
-      </div>
+      <div className="panel-header analysis-panel-header"><div><span className="eyebrow">Ejecución y datos</span><h2>Análisis eléctricos</h2></div><button className="mini-button" type="button" onClick={editorActions.closeAnalysisPanel} title="Volver a propiedades">×</button></div>
       <div className="analysis-tabs" role="tablist">
-        {[
-          ["execute", "Ejecutar"],
-          ["results", "Resultados"],
-          ["overview", "Preparación"],
-          ["cases", "Casos"],
-          ["configuration", "Solver"],
-          ["model", "Modelo"],
-        ].map(([id, label]) => (
-          <button key={id} type="button" className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>
-        ))}
+        {[["execute", "Ejecutar"], ["results", "Resultados"], ["overview", "Preparación"], ["cases", "Casos"], ["configuration", "Solver"], ["model", "Modelo"]].map(([id, label]) => <button key={id} type="button" className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>)}
       </div>
-      {tab === "execute" && (
-        <ExecutionTab
-          document={document}
-          validation={validation}
-          configuration={configuration}
-          activeProject={activeProject}
-          activeDiagram={activeDiagram}
-          editorActions={editorActions}
-          workspaceActions={workspaceActions}
-        />
-      )}
+      {tab === "execute" && <ExecutionTab document={document} configuration={configuration} activeProject={activeProject} activeDiagram={activeDiagram} editorActions={editorActions} workspaceActions={workspaceActions} />}
       {tab === "results" && <ResultsTab overlay={editorData.analysisOverlay} actions={editorActions} activeDiagram={activeDiagram} document={document} />}
       {tab === "overview" && <OverviewTab document={document} validation={validation} activeDiagram={activeDiagram} />}
       {tab === "cases" && <CasesTab document={document} validation={validation} actions={editorActions} canEdit={Boolean(activeProject?.canEdit)} />}

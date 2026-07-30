@@ -21,7 +21,18 @@ import { synchronizeElectricalModel } from "../domain/electrical/electricalModel
 import { markParameterAsUserValue, patchParameterMetadata } from "../domain/electrical/parameterValue.js";
 import { createOperatingCase, normalizeOperatingCases } from "../domain/analysis/operatingCases.js";
 import { normalizeAnalysisConfiguration } from "../domain/analysis/analysisConfiguration.js";
-import { DEFAULT_ANALYSIS_OVERLAY_OPTIONS, normalizeAnalysisResult } from "../domain/analysis/analysisResults.js";
+import {
+  DEFAULT_ANALYSIS_OVERLAY_OPTIONS,
+  defaultAnalysisResultViewId,
+  normalizeAnalysisResult,
+} from "../domain/analysis/analysisResults.js";
+import { saveAnalysisResultLayoutService } from "../services/analysis/index.js";
+import {
+  clearAnalysisLabelLayout,
+  loadAnalysisLabelLayout,
+  parseAnalysisLabelLayoutJson,
+  saveAnalysisLabelLayout,
+} from "../infrastructure/analysis/localAnalysisLayoutRepository.js";
 
 const HISTORY_LIMIT = 100;
 const DRAW_TOOLS = new Set(["path", "line"]);
@@ -48,6 +59,8 @@ export function createInitialEditorState(document) {
       analysisOverlay: {
         study: null,
         result: null,
+        viewId: null,
+        labelOffsets: {},
         options: { ...DEFAULT_ANALYSIS_OVERLAY_OPTIONS },
       },
       notice: null,
@@ -445,6 +458,8 @@ export class EditorStore {
 
       activateAnalysisResult: (study, result) => {
         const normalized = normalizeAnalysisResult(result);
+        const studyId = study?.id || normalized.studyId;
+        const diagramId = this.state.document.id || normalized.diagramId;
         this.setState((state) => ({
           ...state,
           ui: {
@@ -452,11 +467,79 @@ export class EditorStore {
             analysisOverlay: {
               study: study ? { ...study } : null,
               result: normalized,
+              viewId: defaultAnalysisResultViewId(normalized),
+              labelOffsets: {
+                ...parseAnalysisLabelLayoutJson(study?.resultLayoutJson),
+                ...loadAnalysisLabelLayout(diagramId, studyId),
+              },
               options: {
                 ...DEFAULT_ANALYSIS_OVERLAY_OPTIONS,
                 ...(state.ui.analysisOverlay?.options ?? {}),
                 visible: true,
               },
+            },
+          },
+        }));
+      },
+
+      setAnalysisResultView: (viewId) => {
+        this.setState((state) => ({
+          ...state,
+          ui: {
+            ...state.ui,
+            analysisOverlay: {
+              ...(state.ui.analysisOverlay ?? {}),
+              viewId,
+            },
+          },
+        }));
+      },
+
+      moveAnalysisResultLabel: (labelId, offset) => {
+        const overlay = this.state.ui.analysisOverlay;
+        if (!overlay?.result || !labelId) return;
+        const x = Number(offset?.x);
+        const y = Number(offset?.y);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+        const nextLayout = {
+          ...(overlay.labelOffsets ?? {}),
+          [labelId]: { x, y },
+        };
+        const studyId = overlay.study?.id || overlay.result.studyId;
+        saveAnalysisLabelLayout(
+          this.state.document.id || overlay.result.diagramId,
+          studyId,
+          nextLayout,
+        );
+        saveAnalysisResultLayoutService(studyId, nextLayout).catch(() => {});
+        this.setState((state) => ({
+          ...state,
+          ui: {
+            ...state.ui,
+            analysisOverlay: {
+              ...(state.ui.analysisOverlay ?? {}),
+              labelOffsets: nextLayout,
+            },
+          },
+        }));
+      },
+
+      resetAnalysisResultLabelLayout: () => {
+        const overlay = this.state.ui.analysisOverlay;
+        if (!overlay?.result) return;
+        const studyId = overlay.study?.id || overlay.result.studyId;
+        clearAnalysisLabelLayout(
+          this.state.document.id || overlay.result.diagramId,
+          studyId,
+        );
+        saveAnalysisResultLayoutService(studyId, {}).catch(() => {});
+        this.setState((state) => ({
+          ...state,
+          ui: {
+            ...state.ui,
+            analysisOverlay: {
+              ...(state.ui.analysisOverlay ?? {}),
+              labelOffsets: {},
             },
           },
         }));
@@ -470,6 +553,8 @@ export class EditorStore {
             analysisOverlay: {
               study: null,
               result: null,
+              viewId: null,
+              labelOffsets: {},
               options: { ...DEFAULT_ANALYSIS_OVERLAY_OPTIONS },
             },
           },

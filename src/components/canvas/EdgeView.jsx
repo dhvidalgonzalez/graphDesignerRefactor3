@@ -28,7 +28,7 @@ export default function EdgeView({ edgeId }) {
   const isLine = edge.kind === "line";
   const middle = isLine ? getEdgeMiddlePoint(data.document, edge) : null;
   const resultIndex = data.analysisOverlay?.result
-    ? createAnalysisResultIndex(data.document, data.analysisOverlay.result)
+    ? createAnalysisResultIndex(data.document, data.analysisOverlay.result, data.analysisOverlay.viewId)
     : null;
   const branchResult = resultIndex?.branchByComponentId.get(edge.id) ?? null;
   const resultColor = branchResult && data.analysisOverlay?.options?.visible && data.analysisOverlay?.options?.colorBranchesByLoading

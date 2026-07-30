@@ -13,6 +13,7 @@ import {
   formatResultNumber,
   getBusResultsForComponent,
   getEntityAnalysisResult,
+  getAnalysisResultView,
   loadingColor,
   voltagePuColor,
 } from "../../domain/analysis/analysisResults.js";
@@ -86,6 +87,7 @@ function resultAccent(result) {
 }
 
 function ActiveComponentResult({ overlay, result, connectedBuses }) {
+  const activeView = overlay?.result ? getAnalysisResultView(overlay.result, overlay.viewId) : null;
   if (!overlay?.result) {
     return (
       <div className="component-analysis-empty">
@@ -107,7 +109,8 @@ function ActiveComponentResult({ overlay, result, connectedBuses }) {
     <div className="component-analysis-result">
       <div className="component-analysis-study" style={{ borderLeftColor: resultAccent(result) }}>
         <span>Estudio activo</span>
-        <strong>{overlay.study?.name || "Flujo de carga"}</strong>
+        <strong>{overlay.study?.name || "Análisis eléctrico"}</strong>
+        <small>{activeView?.label || overlay.result.analysisType}</small>
         <code>{overlay.result.studyId}</code>
       </div>
       <div className="component-analysis-grid">
@@ -142,8 +145,8 @@ export default function ElectricalPropertiesModal() {
       : null;
 
   const resultIndex = useMemo(
-    () => (data.analysisOverlay?.result ? createAnalysisResultIndex(data.document, data.analysisOverlay.result) : null),
-    [data.analysisOverlay?.result, data.document],
+    () => (data.analysisOverlay?.result ? createAnalysisResultIndex(data.document, data.analysisOverlay.result, data.analysisOverlay.viewId) : null),
+    [data.analysisOverlay?.result, data.analysisOverlay?.viewId, data.document],
   );
   const activeResult = resultIndex && data.editor
     ? getEntityAnalysisResult(resultIndex, data.editor.kind, data.editor.id)

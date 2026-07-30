@@ -54,7 +54,7 @@ backend.analysisOrchestrator.resources.lambda.addToRolePolicy(
     effect: Effect.ALLOW,
     actions: ["ssm:GetParameter"],
     resources: [
-      `arn:${analysisStack.partition}:ssm:${analysisStack.region}:${analysisStack.account}:parameter/gestion-diagrams/*/analysis/power-flow-worker-arn`,
+      `arn:${analysisStack.partition}:ssm:${analysisStack.region}:${analysisStack.account}:parameter/gestion-diagrams/*/analysis/*worker-arn`,
     ],
   }),
 );
@@ -64,7 +64,7 @@ backend.analysisOrchestrator.resources.lambda.addToRolePolicy(
     effect: Effect.ALLOW,
     actions: ["lambda:InvokeFunction"],
     resources: [
-      `arn:${analysisStack.partition}:lambda:${analysisStack.region}:${analysisStack.account}:function:gestion-power-flow-solver-*-power-flow-worker`,
+      `arn:${analysisStack.partition}:lambda:${analysisStack.region}:${analysisStack.account}:function:gestion-power-flow-solver-*-*worker`,
     ],
   }),
 );

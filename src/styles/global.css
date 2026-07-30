@@ -5345,3 +5345,118 @@ kbd {
   background: #fffbeb;
   border-color: #fde68a;
 }
+
+/* Multi-analysis workspace -------------------------------------------------- */
+.analysis-option-fields {
+  display: grid;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.72);
+}
+
+.analysis-inline-options,
+.analysis-number-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.analysis-number-grid label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.analysis-number-grid label > span {
+  color: #64748b;
+  font-size: 0.76rem;
+  font-weight: 650;
+}
+
+.analysis-number-grid input {
+  width: 100%;
+  min-width: 0;
+}
+
+.analysis-toggle-field {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 30px;
+  color: #334155;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+
+.analysis-toggle-field input {
+  width: 15px;
+  height: 15px;
+  margin: 0;
+}
+
+.analysis-option-group {
+  display: grid;
+  gap: 7px;
+}
+
+.analysis-option-group__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.analysis-selection-list {
+  display: grid;
+  gap: 4px;
+  max-height: 145px;
+  overflow: auto;
+  padding: 3px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.analysis-selection-list label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 6px;
+  border-radius: 5px;
+  cursor: pointer;
+}
+
+.analysis-selection-list label:hover {
+  background: #f1f5f9;
+}
+
+.analysis-selection-list span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.78rem;
+}
+
+.analysis-selection-list code {
+  max-width: 105px;
+  overflow: hidden;
+  color: #94a3b8;
+  font-size: 0.63rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.analysis-selection-list input {
+  margin: 0;
+}
+
+@media (max-width: 760px) {
+  .analysis-inline-options,
+  .analysis-number-grid {
+    grid-template-columns: 1fr;
+  }
+}

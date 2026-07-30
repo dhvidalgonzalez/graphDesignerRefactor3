@@ -29,9 +29,17 @@ const ssm = new SSMClient({});
 const BUCKET = env.GRAPH_DESIGNER_DOCUMENTS_BUCKET_NAME;
 const STORAGE_PREFIX = String(env.ANALYSIS_STORAGE_PREFIX || "power-flow")
   .replace(/^\/+|\/+$/g, "");
-const WORKER_PARAMETER = env.POWER_FLOW_WORKER_ARN_PARAMETER;
+const WORKER_PARAMETER =
+  env.ANALYSIS_WORKER_ARN_PARAMETER || env.POWER_FLOW_WORKER_ARN_PARAMETER;
 const TICKET_EXPIRATION_SECONDS = 300;
-const SUPPORTED_ANALYSIS_TYPES = new Set(["POWER_FLOW"]);
+const ANALYSIS_DEFINITIONS = {
+  POWER_FLOW: { label: "Flujo de carga AC", units: 1 },
+  DC_POWER_FLOW: { label: "Flujo de carga DC", units: 1 },
+  CONTINGENCY_N_1: { label: "Contingencia N-1", units: 3 },
+  OPERATING_CASE_SWEEP: { label: "Barrido de casos de operación", units: 2 },
+  LOADABILITY: { label: "Margen de cargabilidad", units: 3 },
+} as const;
+const SUPPORTED_ANALYSIS_TYPES = new Set(Object.keys(ANALYSIS_DEFINITIONS));
 const SUPPORTED_EXECUTION_PREFERENCES = new Set(["AUTO", "STANDARD"]);
 const TERMINAL_STATUSES = new Set([
   "CONVERGED",
@@ -53,6 +61,7 @@ type StartAnalysisArguments = {
   diagramId: string;
   operatingCaseId: string;
   analysisType?: string | null;
+  analysisOptionsJson?: string | null;
   executionPreference?: string | null;
   expectedDiagramVersion: number;
   clientRequestId: string;
@@ -62,6 +71,11 @@ type StartAnalysisArguments = {
 type ArtifactArguments = {
   studyId: string;
   artifactType: string;
+};
+
+type LayoutArguments = {
+  studyId: string;
+  layoutJson: string;
 };
 
 type AnalysisRequestResult = {
@@ -217,6 +231,17 @@ function canReadStudy(
     includesIdentity(study.ownerIdentities, identity) ||
     includesIdentity(study.editorIdentities, identity) ||
     includesIdentity(study.viewerIdentities, identity) ||
+    study.requestedByProfileId === identity.sub
+  );
+}
+
+function canEditStudyLayout(
+  study: Schema["AnalysisStudy"]["type"],
+  identity: Identity,
+) {
+  return (
+    includesIdentity(study.ownerIdentities, identity) ||
+    includesIdentity(study.editorIdentities, identity) ||
     study.requestedByProfileId === identity.sub
   );
 }
@@ -533,6 +558,214 @@ function normalizeSolverOptions(candidate: Record<string, unknown> | undefined) 
   };
 }
 
+function finiteNumber(
+  value: unknown,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  const number = Number(value);
+  if (!Number.isFinite(number)) return fallback;
+  return Math.min(maximum, Math.max(minimum, number));
+}
+
+function stringArray(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value
+    .map((item) => String(item || "").trim())
+    .filter(Boolean))];
+}
+
+function parseAnalysisOptionsJson(value: string | null | undefined) {
+  if (!value) return {} as Record<string, unknown>;
+  if (value.length > 32_000) throw new Error("ANALYSIS_OPTIONS_TOO_LARGE");
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("ANALYSIS_OPTIONS_INVALID");
+    }
+    return parsed as Record<string, unknown>;
+  } catch (error) {
+    if (error instanceof Error && error.message === "ANALYSIS_OPTIONS_INVALID") {
+      throw error;
+    }
+    throw new Error("ANALYSIS_OPTIONS_JSON_INVALID");
+  }
+}
+
+function normalizeAnalysisOptions(
+  analysisType: string,
+  candidate: Record<string, unknown>,
+) {
+  if (analysisType === "DC_POWER_FLOW") {
+    return {
+      calculateLineLoading: candidate.calculateLineLoading !== false,
+    };
+  }
+  if (analysisType === "CONTINGENCY_N_1") {
+    const minimumVoltagePu = finiteNumber(
+      candidate.minimumVoltagePu,
+      0.95,
+      0.1,
+      1.5,
+    );
+    return {
+      includeLines: candidate.includeLines !== false,
+      includeTransformers: candidate.includeTransformers !== false,
+      selectedComponentIds: stringArray(candidate.selectedComponentIds),
+      maximumContingencies: Math.round(finiteNumber(
+        candidate.maximumContingencies,
+        50,
+        1,
+        100,
+      )),
+      minimumVoltagePu,
+      maximumVoltagePu: finiteNumber(
+        candidate.maximumVoltagePu,
+        1.05,
+        minimumVoltagePu,
+        1.5,
+      ),
+      maximumLoadingPercent: finiteNumber(
+        candidate.maximumLoadingPercent,
+        100,
+        1,
+        1000,
+      ),
+    };
+  }
+  if (analysisType === "OPERATING_CASE_SWEEP") {
+    const minimumVoltagePu = finiteNumber(
+      candidate.minimumVoltagePu,
+      0.95,
+      0.1,
+      1.5,
+    );
+    return {
+      caseIds: stringArray(candidate.caseIds).slice(0, 50),
+      minimumVoltagePu,
+      maximumVoltagePu: finiteNumber(
+        candidate.maximumVoltagePu,
+        1.05,
+        minimumVoltagePu,
+        1.5,
+      ),
+      maximumLoadingPercent: finiteNumber(
+        candidate.maximumLoadingPercent,
+        100,
+        1,
+        1000,
+      ),
+    };
+  }
+  if (analysisType === "LOADABILITY") {
+    const startMultiplier = finiteNumber(
+      candidate.startMultiplier,
+      1,
+      0.01,
+      20,
+    );
+    return {
+      selectedComponentIds: stringArray(candidate.selectedComponentIds),
+      startMultiplier,
+      maximumMultiplier: finiteNumber(
+        candidate.maximumMultiplier,
+        2,
+        startMultiplier,
+        20,
+      ),
+      step: finiteNumber(candidate.step, 0.05, 0.001, 10),
+      minimumVoltagePu: finiteNumber(candidate.minimumVoltagePu, 0.95, 0.1, 1.5),
+      maximumVoltagePu: finiteNumber(candidate.maximumVoltagePu, 1.05, 0.1, 1.5),
+      maximumLoadingPercent: finiteNumber(
+        candidate.maximumLoadingPercent,
+        100,
+        1,
+        1000,
+      ),
+      stopAtFirstViolation: candidate.stopAtFirstViolation !== false,
+    };
+  }
+  return {};
+}
+
+function validationFailure(validation: ReturnType<typeof validateElectricalModel>) {
+  if (!validation.errors.length) return;
+  const details = validation.errors
+    .slice(0, 8)
+    .map((item) => `${item.code}: ${item.message}`)
+    .join(" | ");
+  throw new Error(`ANALYSIS_MODEL_NOT_READY: ${details}`);
+}
+
+function modelForOperatingCase(
+  document: DiagramDocument,
+  operatingCase: OperatingCase,
+) {
+  const components = document.electricalModel?.components ?? [];
+  const terminals = document.electricalModel?.terminals ?? [];
+  const connectionNodes = document.electricalModel?.connectionNodes ?? [];
+  const appliedComponents = components.map((component) =>
+    applyOperatingCase(component, operatingCase),
+  );
+  const validation = validateElectricalModel(
+    appliedComponents,
+    terminals,
+    connectionNodes,
+  );
+  return {
+    validation,
+    electricalModel: {
+      schemaVersion: Number(document.electricalModel?.schemaVersion) || 1,
+      components: appliedComponents,
+      terminals,
+      connectionNodes,
+    },
+  };
+}
+
+function validateAnalysisSpecificModel(
+  analysisType: string,
+  analysisOptions: Record<string, unknown>,
+  model: ReturnType<typeof modelForOperatingCase>["electricalModel"],
+  cases: OperatingCase[],
+) {
+  const components = model.components.filter(isComponentInService);
+  if (analysisType === "CONTINGENCY_N_1") {
+    const selected = new Set(stringArray(analysisOptions.selectedComponentIds));
+    const includeLines = analysisOptions.includeLines !== false;
+    const includeTransformers = analysisOptions.includeTransformers !== false;
+    const candidates = components.filter((component) => {
+      if (selected.size && !selected.has(component.id)) return false;
+      return (includeLines && component.kind === "LINE") ||
+        (includeTransformers && component.kind === "TRANSFORMER_2W");
+    });
+    if (!candidates.length) throw new Error("NO_CONTINGENCY_CANDIDATES");
+  }
+  if (analysisType === "OPERATING_CASE_SWEEP") {
+    const selected = new Set(stringArray(analysisOptions.caseIds));
+    const targets = selected.size
+      ? cases.filter((item) => selected.has(item.id))
+      : cases;
+    if (!targets.length) throw new Error("NO_OPERATING_CASES_SELECTED");
+    if (targets.length > 50) throw new Error("TOO_MANY_OPERATING_CASES");
+  }
+  if (analysisType === "LOADABILITY") {
+    const selected = new Set(stringArray(analysisOptions.selectedComponentIds));
+    const loads = components.filter((component) =>
+      component.kind === "LOAD" && (!selected.size || selected.has(component.id))
+    );
+    if (!loads.length) throw new Error("NO_LOADS_SELECTED");
+    const start = Number(analysisOptions.startMultiplier);
+    const maximum = Number(analysisOptions.maximumMultiplier);
+    const step = Number(analysisOptions.step);
+    const estimatedRuns = Math.floor((maximum - start) / step) + 2;
+    if (!Number.isFinite(estimatedRuns) || estimatedRuns > 200) {
+      throw new Error("LOADABILITY_RUN_LIMIT_EXCEEDED");
+    }
+  }
+}
+
 function buildAnalysisInput(
   document: DiagramDocument,
   options: {
@@ -541,6 +774,7 @@ function buildAnalysisInput(
     diagramStorageVersion: number;
     operatingCaseId: string;
     analysisType: string;
+    analysisOptions: Record<string, unknown>;
   },
 ) {
   if (Number(document.schemaVersion) !== 3) {
@@ -563,24 +797,17 @@ function buildAnalysisInput(
     cases.find((item) => item.id === options.operatingCaseId) ?? null;
   if (!operatingCase) throw new Error("OPERATING_CASE_NOT_FOUND");
 
-  const appliedComponents = components.map((component) =>
-    applyOperatingCase(component, operatingCase),
+  const base = modelForOperatingCase(document, operatingCase);
+  validationFailure(base.validation);
+  validateAnalysisSpecificModel(
+    options.analysisType,
+    options.analysisOptions,
+    base.electricalModel,
+    cases,
   );
-  const validation = validateElectricalModel(
-    appliedComponents,
-    terminals,
-    connectionNodes,
-  );
-  if (validation.errors.length) {
-    const details = validation.errors
-      .slice(0, 8)
-      .map((item) => `${item.code}: ${item.message}`)
-      .join(" | ");
-    throw new Error(`ANALYSIS_MODEL_NOT_READY: ${details}`);
-  }
 
-  return {
-    schemaVersion: 1,
+  const input: Record<string, unknown> = {
+    schemaVersion: 2,
     studyId: options.studyId,
     diagramId: options.diagramId,
     diagramStorageVersion: options.diagramStorageVersion,
@@ -589,26 +816,41 @@ function buildAnalysisInput(
     solverOptions: normalizeSolverOptions(
       document.analysisConfiguration?.solverOptions,
     ),
-    validation,
-    electricalModel: {
-      schemaVersion: Number(document.electricalModel?.schemaVersion) || 1,
-      components: appliedComponents,
-      terminals,
-      connectionNodes,
-    },
+    analysisOptions: options.analysisOptions,
+    validation: base.validation,
+    electricalModel: base.electricalModel,
   };
+
+  if (options.analysisType === "OPERATING_CASE_SWEEP") {
+    const selected = new Set(stringArray(options.analysisOptions.caseIds));
+    const targets = selected.size
+      ? cases.filter((item) => selected.has(item.id))
+      : cases;
+    input.scenarios = targets.map((item) => {
+      const scenario = modelForOperatingCase(document, item);
+      validationFailure(scenario.validation);
+      return {
+        operatingCaseId: item.id,
+        name: item.name || item.id,
+        validation: scenario.validation,
+        electricalModel: scenario.electricalModel,
+      };
+    });
+  }
+
+  return input;
 }
 
 async function resolveWorkerArn() {
   if (cachedWorkerArn) return cachedWorkerArn;
   if (!WORKER_PARAMETER) {
-    throw new Error("POWER_FLOW_WORKER_ARN_PARAMETER_NOT_CONFIGURED");
+    throw new Error("ANALYSIS_WORKER_ARN_PARAMETER_NOT_CONFIGURED");
   }
   const response = await ssm.send(
     new GetParameterCommand({ Name: WORKER_PARAMETER }),
   );
   const workerArn = response.Parameter?.Value?.trim();
-  if (!workerArn) throw new Error("POWER_FLOW_WORKER_ARN_NOT_FOUND");
+  if (!workerArn) throw new Error("ANALYSIS_WORKER_ARN_NOT_FOUND");
   cachedWorkerArn = workerArn;
   return workerArn;
 }
@@ -686,6 +928,10 @@ async function startAnalysis(
     args.executionPreference || "AUTO",
   ).toUpperCase();
   const expectedVersion = Number(args.expectedDiagramVersion);
+  const analysisOptions = normalizeAnalysisOptions(
+    analysisType,
+    parseAnalysisOptionsJson(args.analysisOptionsJson),
+  );
 
   if (!SUPPORTED_ANALYSIS_TYPES.has(analysisType)) {
     throw new Error("ANALYSIS_TYPE_NOT_SUPPORTED");
@@ -758,6 +1004,7 @@ async function startAnalysis(
     diagramStorageVersion: currentVersion,
     operatingCaseId,
     analysisType,
+    analysisOptions,
   });
 
   const createResult = await client.models.AnalysisStudy.create({
@@ -766,10 +1013,13 @@ async function startAnalysis(
     projectId: project.id,
     diagramId: diagram.id,
     operatingCaseId,
-    name: String(args.name || `Flujo de carga · ${document.name || diagram.name}`)
+    name: String(
+      args.name || `${ANALYSIS_DEFINITIONS[analysisType as keyof typeof ANALYSIS_DEFINITIONS].label} · ${document.name || diagram.name}`,
+    )
       .trim()
       .slice(0, 160),
-    analysisType: "POWER_FLOW",
+    analysisType: analysisType as keyof typeof ANALYSIS_DEFINITIONS,
+    analysisOptionsJson: JSON.stringify(analysisOptions),
     executionPreference:
       executionPreference === "STANDARD" ? "STANDARD" : "AUTO",
     executionTier: "STANDARD",
@@ -780,7 +1030,7 @@ async function startAnalysis(
     inputStorageKey,
     requestedMemoryMb: 3072,
     executionTimeoutSeconds: 840,
-    reservedUnits: 1,
+    reservedUnits: ANALYSIS_DEFINITIONS[analysisType as keyof typeof ANALYSIS_DEFINITIONS].units,
     consumedUnits: 0,
     requestedByProfileId: identity.sub,
     requestedAt,
@@ -911,9 +1161,59 @@ async function requestArtifact(
   };
 }
 
+
+function normalizeResultLayoutJson(layoutJson: string) {
+  if (typeof layoutJson !== "string" || layoutJson.length > 100_000) {
+    throw new Error("ANALYSIS_LAYOUT_TOO_LARGE");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(layoutJson);
+  } catch {
+    throw new Error("ANALYSIS_LAYOUT_JSON_INVALID");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("ANALYSIS_LAYOUT_INVALID");
+  }
+  const entries = Object.entries(parsed as Record<string, unknown>);
+  if (entries.length > 1000) throw new Error("ANALYSIS_LAYOUT_ENTRY_LIMIT_EXCEEDED");
+  const normalized: Record<string, { x: number; y: number }> = {};
+  for (const [key, value] of entries) {
+    if (!key || key.length > 240 || !value || typeof value !== "object") continue;
+    const x = Number((value as { x?: unknown }).x);
+    const y = Number((value as { y?: unknown }).y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    normalized[key] = {
+      x: Math.max(-100_000, Math.min(100_000, x)),
+      y: Math.max(-100_000, Math.min(100_000, y)),
+    };
+  }
+  return JSON.stringify(normalized);
+}
+
+async function saveResultLayout(
+  args: LayoutArguments,
+  identity: Identity,
+) {
+  const studyId = safeSegment(args.studyId, "study_id");
+  const result = await client.models.AnalysisStudy.get({ id: studyId });
+  const study = result.data;
+  if (result.errors?.length || !study) throw new Error("ANALYSIS_STUDY_NOT_FOUND");
+  if (!canEditStudyLayout(study, identity)) throw new Error("WRITE_ACCESS_REQUIRED");
+  const layoutJson = normalizeResultLayoutJson(args.layoutJson);
+  const update = await client.models.AnalysisStudy.update({
+    id: studyId,
+    resultLayoutJson: layoutJson,
+  });
+  if (update.errors?.length || !update.data) {
+    throw new Error("ANALYSIS_LAYOUT_SAVE_FAILED");
+  }
+  return true;
+}
+
 export const handler: AppSyncResolverHandler<
-  StartAnalysisArguments | ArtifactArguments,
-  AnalysisRequestResult | AnalysisArtifactTicket
+  StartAnalysisArguments | ArtifactArguments | LayoutArguments,
+  AnalysisRequestResult | AnalysisArtifactTicket | boolean
 > = async (event) => {
   const identity = getIdentity(event.identity);
   if (!identity.sub) throw new Error("UNAUTHENTICATED");
@@ -933,6 +1233,8 @@ export const handler: AppSyncResolverHandler<
       );
     case "requestAnalysisArtifact":
       return requestArtifact(event.arguments as ArtifactArguments, identity);
+    case "saveAnalysisResultLayout":
+      return saveResultLayout(event.arguments as LayoutArguments, identity);
     default:
       throw new Error("UNSUPPORTED_ANALYSIS_OPERATION");
   }

@@ -1,6 +1,6 @@
 import { Arrow, Group, Rect, Text } from "react-konva";
-import { useMemo } from "react";
-import { shallowEqual, useEditorSelector } from "../../editor/EditorContext.jsx";
+import { useMemo, useState } from "react";
+import { shallowEqual, useEditorActions, useEditorSelector } from "../../editor/EditorContext.jsx";
 import { getEdgePoints } from "../../domain/diagram/edgeGeometry.js";
 import {
   branchFlowArrowSegment,
@@ -9,57 +9,104 @@ import {
   formatPowerKw,
   formatReactivePowerKvar,
   formatResultNumber,
+  getAnalysisNetworkResult,
   getBranchPosition,
   getConnectionNodePosition,
   getEquipmentPosition,
   loadingColor,
-  voltagePuColor,
 } from "../../domain/analysis/analysisResults.js";
 
-function ResultLabel({ x, y, title, lines, accent = "#2563eb", anchor = "left" }) {
+function ResultLabel({
+  id,
+  x,
+  y,
+  title,
+  lines,
+  anchor = "left",
+  offset,
+  onMove,
+}) {
+  const [hovered, setHovered] = useState(false);
   const safeLines = lines.filter(Boolean);
   if (!safeLines.length) return null;
-  const longest = Math.max(title?.length ?? 0, ...safeLines.map((line) => line.length));
-  const width = Math.max(25, Math.min(54, longest * 1.65 + 6));
-  const lineHeight = 3.5;
-  const height = 5.2 + safeLines.length * lineHeight;
-  const offsetX = anchor === "center" ? -width / 2 : anchor === "right" ? -width : 0;
+
+  const displayedLines = hovered ? safeLines : safeLines.slice(0, 1);
+  const compactText = displayedLines[0] || title || "Resultado";
+  const longest = Math.max(
+    hovered ? title?.length ?? 0 : 0,
+    ...displayedLines.map((line) => line.length),
+  );
+  const width = hovered
+    ? Math.max(24, Math.min(52, longest * 1.48 + 5))
+    : Math.max(14, Math.min(32, compactText.length * 1.33 + 4));
+  const lineHeight = hovered ? 3.25 : 2.9;
+  const titleHeight = hovered && title ? 3.6 : 0;
+  const height = 2.3 + titleHeight + displayedLines.length * lineHeight;
+  const anchorOffset = anchor === "center" ? -width / 2 : anchor === "right" ? -width : 0;
+  const originX = x + anchorOffset;
+  const originY = y;
+  const layout = offset ?? { x: 0, y: 0 };
+
   return (
-    <Group x={x + offsetX} y={y} listening={false}>
+    <Group
+      id={id}
+      x={originX + layout.x}
+      y={originY + layout.y}
+      draggable
+      onDragStart={(event) => { event.cancelBubble = true; }}
+      onDragEnd={(event) => {
+        event.cancelBubble = true;
+        onMove?.({
+          x: event.target.x() - originX,
+          y: event.target.y() - originY,
+        });
+      }}
+      onMouseEnter={(event) => {
+        setHovered(true);
+        const container = event.target.getStage()?.container();
+        if (container) container.style.cursor = "move";
+      }}
+      onMouseLeave={(event) => {
+        setHovered(false);
+        const container = event.target.getStage()?.container();
+        if (container) container.style.cursor = "default";
+      }}
+      onClick={(event) => { event.cancelBubble = true; }}
+      onTap={(event) => { event.cancelBubble = true; }}
+    >
       <Rect
         width={width}
         height={height}
-        fill="rgba(255,255,255,0.94)"
-        stroke={accent}
-        strokeWidth={0.45}
-        cornerRadius={1.6}
-        shadowColor="rgba(15,23,42,0.22)"
-        shadowBlur={2.2}
-        shadowOffsetY={0.8}
+        fill={hovered ? "rgba(255,255,255,0.98)" : "rgba(255,255,255,0.9)"}
+        stroke="rgba(15,23,42,0.72)"
+        strokeWidth={hovered ? 0.42 : 0.28}
+        cornerRadius={1.05}
+        shadowColor="rgba(15,23,42,0.16)"
+        shadowBlur={hovered ? 2.2 : 0.8}
+        shadowOffsetY={hovered ? 0.7 : 0.3}
       />
-      <Rect width={1.4} height={height} fill={accent} cornerRadius={[1.6, 0, 0, 1.6]} />
-      {title && (
+      {hovered && title && (
         <Text
-          x={3.2}
-          y={1.25}
-          width={width - 5}
+          x={2}
+          y={0.85}
+          width={width - 4}
           text={title}
           fill="#0f172a"
-          fontSize={2.45}
+          fontSize={2.15}
           fontStyle="bold"
           ellipsis
           wrap="none"
         />
       )}
-      {safeLines.map((line, index) => (
+      {displayedLines.map((line, index) => (
         <Text
           key={`${line}-${index}`}
-          x={3.2}
-          y={title ? 4.25 + index * lineHeight : 1.5 + index * lineHeight}
-          width={width - 5}
+          x={2}
+          y={1.05 + titleHeight + index * lineHeight}
+          width={width - 4}
           text={line}
-          fill="#334155"
-          fontSize={2.25}
+          fill="#1e293b"
+          fontSize={hovered ? 2.05 : 1.9}
           wrap="none"
           ellipsis
         />
@@ -72,7 +119,9 @@ function busTitle(document, index, bus) {
   const connectionNode = index.connectionNodeById.get(bus.connectionNodeId)
     ?? index.connectionNodeById.get(bus.busId)
     ?? index.connectionNodeByBusComponentId.get(bus.busId);
-  const visualNode = connectionNode?.busComponentId ? document.nodes?.[connectionNode.busComponentId] : document.nodes?.[bus.busId];
+  const visualNode = connectionNode?.busComponentId
+    ? document.nodes?.[connectionNode.busComponentId]
+    : document.nodes?.[bus.busId];
   return visualNode?.properties?.name || connectionNode?.busComponentId || bus.busId || "Barra";
 }
 
@@ -86,14 +135,23 @@ export default function AnalysisOverlayLayer() {
     overlay: state.ui.analysisOverlay,
     scale: state.viewport.scale,
   }), shallowEqual);
-  const result = data.overlay?.result;
+  const actions = useEditorActions();
+  const rawResult = data.overlay?.result;
+  const viewId = data.overlay?.viewId;
   const options = data.overlay?.options;
+  const result = useMemo(
+    () => (rawResult ? getAnalysisNetworkResult(rawResult, viewId) : null),
+    [rawResult, viewId],
+  );
   const index = useMemo(
-    () => (result ? createAnalysisResultIndex(data.document, result) : null),
-    [data.document, result],
+    () => (rawResult ? createAnalysisResultIndex(data.document, rawResult, viewId) : null),
+    [data.document, rawResult, viewId],
   );
 
-  if (!result || !options?.visible || !index) return null;
+  if (!rawResult || !result || !options?.visible || !index) return null;
+
+  const offsetFor = (id) => data.overlay?.labelOffsets?.[`${viewId || "network"}:${id}`] ?? { x: 0, y: 0 };
+  const moveLabel = (id, offset) => actions.moveAnalysisResultLabel(`${viewId || "network"}:${id}`, offset);
 
   return (
     <>
@@ -120,19 +178,20 @@ export default function AnalysisOverlayLayer() {
       {result.buses.map((bus) => {
         const position = getConnectionNodePosition(data.document, index, bus.connectionNodeId, bus.busId);
         if (!position) return null;
+        const id = `bus:${bus.connectionNodeId || bus.busId}`;
         const lines = [];
-        if (options.showBusVoltages) {
-          lines.push(`${formatResultNumber(bus.voltageKv, 3)} kV · ${formatResultNumber(bus.voltagePu, 4)} p.u.`);
-        }
+        if (options.showBusVoltages) lines.push(`${formatResultNumber(bus.voltagePu, 4)} p.u. · ${formatResultNumber(bus.voltageKv, 2)} kV`);
         if (options.showBusAngles) lines.push(`${formatResultNumber(bus.angleDeg, 3)}° · ${bus.status || "NORMAL"}`);
         return (
           <ResultLabel
-            key={`bus-${bus.connectionNodeId || bus.busId}`}
-            x={position.x + 5}
-            y={position.y - 12}
+            key={id}
+            id={`analysis-${id}`}
+            x={position.x + 4}
+            y={position.y - 7}
             title={busTitle(data.document, index, bus)}
             lines={lines}
-            accent={voltagePuColor(bus.voltagePu, bus.status)}
+            offset={offsetFor(id)}
+            onMove={(offset) => moveLabel(id, offset)}
           />
         );
       })}
@@ -140,21 +199,24 @@ export default function AnalysisOverlayLayer() {
       {result.branches.map((branch) => {
         const position = getBranchPosition(data.document, branch.componentId);
         if (!position) return null;
+        const id = `branch:${branch.componentId}`;
         const lines = [];
-        if (options.showActivePowerFlows) lines.push(`P: ${formatPowerKw(branch.activePowerFromKw)}`);
-        if (options.showReactivePowerFlows) lines.push(`Q: ${formatReactivePowerKvar(branch.reactivePowerFromKvar)}`);
-        if (options.showCurrents) lines.push(`I: ${formatCurrentA(branch.currentFromA)}`);
-        if (options.showLoading) lines.push(`Carga: ${formatResultNumber(branch.loadingPercent, 1)} %`);
-        if (options.showLosses) lines.push(`Pérdidas: ${formatPowerKw(branch.activeLossKw)}`);
+        if (options.showActivePowerFlows) lines.push(`P ${formatPowerKw(branch.activePowerFromKw)}`);
+        if (options.showReactivePowerFlows) lines.push(`Q ${formatReactivePowerKvar(branch.reactivePowerFromKvar)}`);
+        if (options.showCurrents) lines.push(`I ${formatCurrentA(branch.currentFromA)}`);
+        if (options.showLoading) lines.push(`${formatResultNumber(branch.loadingPercent, 1)} %`);
+        if (options.showLosses) lines.push(`ΔP ${formatPowerKw(branch.activeLossKw)}`);
         return (
           <ResultLabel
-            key={`branch-${branch.componentId}`}
+            key={id}
+            id={`analysis-${id}`}
             x={position.x}
-            y={position.y + 4.2}
+            y={position.y + 2.8}
             title={branchTitle(data.document, branch)}
             lines={lines}
-            accent={loadingColor(branch.loadingPercent, branch.status)}
             anchor="center"
+            offset={offsetFor(id)}
+            onMove={(offset) => moveLabel(id, offset)}
           />
         );
       })}
@@ -162,17 +224,17 @@ export default function AnalysisOverlayLayer() {
       {options.showEquipmentPower && result.generators.map((generator) => {
         const position = getEquipmentPosition(data.document, generator.componentId);
         if (!position) return null;
+        const id = `generator:${generator.componentId}`;
         return (
           <ResultLabel
-            key={`generator-${generator.componentId}`}
-            x={position.x + 6}
-            y={position.y + 7}
+            key={id}
+            id={`analysis-${id}`}
+            x={position.x + 5}
+            y={position.y + 5}
             title={data.document.nodes?.[generator.componentId]?.properties?.name || generator.componentId}
-            lines={[
-              `P: ${formatPowerKw(generator.activePowerKw)}`,
-              `Q: ${formatReactivePowerKvar(generator.reactivePowerKvar)}`,
-            ]}
-            accent="#2563eb"
+            lines={[`P ${formatPowerKw(generator.activePowerKw)}`, `Q ${formatReactivePowerKvar(generator.reactivePowerKvar)}`]}
+            offset={offsetFor(id)}
+            onMove={(offset) => moveLabel(id, offset)}
           />
         );
       })}
@@ -180,17 +242,17 @@ export default function AnalysisOverlayLayer() {
       {options.showEquipmentPower && result.loads.map((load) => {
         const position = getEquipmentPosition(data.document, load.componentId);
         if (!position) return null;
+        const id = `load:${load.componentId}`;
         return (
           <ResultLabel
-            key={`load-${load.componentId}`}
-            x={position.x + 6}
-            y={position.y + 7}
+            key={id}
+            id={`analysis-${id}`}
+            x={position.x + 5}
+            y={position.y + 5}
             title={data.document.nodes?.[load.componentId]?.properties?.name || load.componentId}
-            lines={[
-              `P: ${formatPowerKw(load.activePowerKw)}`,
-              `Q: ${formatReactivePowerKvar(load.reactivePowerKvar)}`,
-            ]}
-            accent="#7c3aed"
+            lines={[`P ${formatPowerKw(load.activePowerKw)}`, `Q ${formatReactivePowerKvar(load.reactivePowerKvar)}`]}
+            offset={offsetFor(id)}
+            onMove={(offset) => moveLabel(id, offset)}
           />
         );
       })}
@@ -198,18 +260,21 @@ export default function AnalysisOverlayLayer() {
       {result.transformers.map((transformer) => {
         const position = getEquipmentPosition(data.document, transformer.componentId);
         if (!position) return null;
+        const id = `transformer:${transformer.componentId}`;
         return (
           <ResultLabel
-            key={`transformer-${transformer.componentId}`}
-            x={position.x + 7}
-            y={position.y - 4}
+            key={id}
+            id={`analysis-${id}`}
+            x={position.x + 6}
+            y={position.y - 3}
             title={data.document.nodes?.[transformer.componentId]?.properties?.name || transformer.componentId}
             lines={[
-              options.showActivePowerFlows ? `P: ${formatPowerKw(transformer.activePowerPrimaryKw)}` : null,
-              options.showLoading ? `Carga: ${formatResultNumber(transformer.loadingPercent, 1)} %` : null,
-              options.showLosses ? `Pérdidas: ${formatPowerKw(transformer.activeLossKw)}` : null,
+              options.showActivePowerFlows ? `P ${formatPowerKw(transformer.activePowerPrimaryKw)}` : null,
+              options.showLoading ? `${formatResultNumber(transformer.loadingPercent, 1)} %` : null,
+              options.showLosses ? `ΔP ${formatPowerKw(transformer.activeLossKw)}` : null,
             ]}
-            accent={loadingColor(transformer.loadingPercent, transformer.status)}
+            offset={offsetFor(id)}
+            onMove={(offset) => moveLabel(id, offset)}
           />
         );
       })}

@@ -36,7 +36,13 @@ const schema = a
     ]),
     BillingSyncSource: a.enum(["WEBHOOK", "MANUAL", "CHECKOUT"]),
     BillingEventStatus: a.enum(["RECEIVED", "PROCESSED", "FAILED"]),
-    AnalysisType: a.enum(["POWER_FLOW"]),
+    AnalysisType: a.enum([
+      "POWER_FLOW",
+      "DC_POWER_FLOW",
+      "CONTINGENCY_N_1",
+      "OPERATING_CASE_SWEEP",
+      "LOADABILITY",
+    ]),
     ExecutionPreference: a.enum(["AUTO", "STANDARD", "ADVANCED"]),
     ExecutionTier: a.enum(["STANDARD", "ADVANCED"]),
     ComputeProvider: a.enum(["LAMBDA", "AWS_BATCH", "ECS_FARGATE", "EMR"]),
@@ -284,6 +290,8 @@ const schema = a
         operatingCaseId: a.string().required(),
         name: a.string(),
         analysisType: a.ref("AnalysisType").required(),
+        analysisOptionsJson: a.string(),
+        resultLayoutJson: a.string(),
         executionPreference: a.ref("ExecutionPreference").required(),
         executionTier: a.ref("ExecutionTier"),
         computeProvider: a.ref("ComputeProvider"),
@@ -578,12 +586,23 @@ const schema = a
         diagramId: a.id().required(),
         operatingCaseId: a.string().required(),
         analysisType: a.ref("AnalysisType"),
+        analysisOptionsJson: a.string(),
         executionPreference: a.ref("ExecutionPreference"),
         expectedDiagramVersion: a.integer().required(),
         clientRequestId: a.string().required(),
         name: a.string(),
       })
       .returns(a.ref("AnalysisRequestResult"))
+      .handler(a.handler.function(analysisOrchestrator))
+      .authorization((allow) => [allow.authenticated()]),
+
+    saveAnalysisResultLayout: a
+      .mutation()
+      .arguments({
+        studyId: a.id().required(),
+        layoutJson: a.string().required(),
+      })
+      .returns(a.boolean())
       .handler(a.handler.function(analysisOrchestrator))
       .authorization((allow) => [allow.authenticated()]),
 

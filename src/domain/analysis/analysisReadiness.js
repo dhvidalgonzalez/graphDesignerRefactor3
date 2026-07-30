@@ -335,3 +335,64 @@ export function evaluateAnalysisReadiness(document) {
     model,
   };
 }
+
+export function evaluateAnalysisReadinessForType(document, analysisType, options = {}) {
+  const base = evaluateAnalysisReadiness(document);
+  const errors = [...base.errors];
+  const warnings = [...base.warnings];
+  const components = base.model.components ?? [];
+
+  if (analysisType === "CONTINGENCY_N_1") {
+    const candidates = components.filter((component) => component.inService && ["LINE", "TRANSFORMER_2W"].includes(component.kind));
+    const selected = new Set(Array.isArray(options.selectedComponentIds) ? options.selectedComponentIds : []);
+    const filtered = selected.size ? candidates.filter((component) => selected.has(component.id)) : candidates;
+    if (!filtered.length) {
+      errors.push(issue("NO_CONTINGENCY_CANDIDATES", "No existen líneas o transformadores seleccionados para el análisis N-1."));
+    }
+    if (filtered.length > 50) {
+      warnings.push(issue("MANY_CONTINGENCIES", `Se solicitaron ${filtered.length} contingencias; la ejecución puede tardar varios minutos.`));
+    }
+  }
+
+  if (analysisType === "OPERATING_CASE_SWEEP") {
+    const selected = new Set(Array.isArray(options.caseIds) ? options.caseIds : []);
+    const cases = Array.isArray(document.operatingCases) ? document.operatingCases : [];
+    const count = selected.size || cases.length;
+    if (!count) errors.push(issue("NO_OPERATING_CASES", "No existen casos de operación para ejecutar."));
+    if (count === 1) warnings.push(issue("SINGLE_OPERATING_CASE", "El barrido contiene un solo caso; no habrá comparación entre escenarios."));
+  }
+
+  if (analysisType === "LOADABILITY") {
+    const loads = components.filter((component) => component.kind === "LOAD" && component.inService);
+    const selected = new Set(Array.isArray(options.selectedComponentIds) ? options.selectedComponentIds : []);
+    const filtered = selected.size ? loads.filter((component) => selected.has(component.id)) : loads;
+    if (!filtered.length) errors.push(issue("NO_LOADS_SELECTED", "No existe ninguna carga en servicio seleccionada para el barrido de cargabilidad."));
+    const start = Number(options.startMultiplier ?? 1);
+    const maximum = Number(options.maximumMultiplier ?? 2);
+    const step = Number(options.step ?? 0.05);
+    if (!Number.isFinite(start) || start <= 0) errors.push(issue("INVALID_START_MULTIPLIER", "El multiplicador inicial debe ser mayor que cero."));
+    if (!Number.isFinite(maximum) || maximum < start) errors.push(issue("INVALID_MAXIMUM_MULTIPLIER", "El multiplicador máximo debe ser mayor o igual al inicial."));
+    if (!Number.isFinite(step) || step <= 0) errors.push(issue("INVALID_LOADABILITY_STEP", "El incremento del barrido debe ser mayor que cero."));
+  }
+
+  if (analysisType === "DC_POWER_FLOW") {
+    const reactiveOnlyWarnings = new Set([
+      "REACTIVE_LIMITS_MISSING",
+      "GENERATOR_VOLTAGE_SETPOINT_MISSING",
+      "LOAD_REACTIVE_DATA_MISSING",
+    ]);
+    return {
+      ...base,
+      readiness: errors.length ? "NOT_READY" : warnings.filter((item) => !reactiveOnlyWarnings.has(item.code)).length ? "READY_WITH_ASSUMPTIONS" : "READY",
+      errors,
+      warnings: warnings.filter((item) => !reactiveOnlyWarnings.has(item.code)),
+    };
+  }
+
+  return {
+    ...base,
+    readiness: errors.length ? "NOT_READY" : warnings.length ? "READY_WITH_ASSUMPTIONS" : "READY",
+    errors,
+    warnings,
+  };
+}

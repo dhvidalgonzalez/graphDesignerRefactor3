@@ -65,3 +65,15 @@ export async function loadAnalysisArtifactTextService(studyId, artifactType) {
     text: await response.text(),
   };
 }
+
+export async function saveAnalysisResultLayoutService(studyId, layout) {
+  if (!studyId) return false;
+  const result = await client.mutations.saveAnalysisResultLayout({
+    studyId,
+    layoutJson: JSON.stringify(layout ?? {}),
+  });
+  if (result.errors?.length || result.data !== true) {
+    throw new Error(errorMessage(result.errors, "No se pudo guardar la posición de las etiquetas."));
+  }
+  return true;
+}

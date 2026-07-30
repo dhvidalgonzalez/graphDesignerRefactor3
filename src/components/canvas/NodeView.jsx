@@ -23,8 +23,8 @@ export default function NodeView({ nodeId }) {
   const readOnly = store.readOnly;
   const groupRef = useRef(null);
   const resultIndex = useMemo(
-    () => (data.analysisOverlay?.result ? createAnalysisResultIndex(data.document, data.analysisOverlay.result) : null),
-    [data.analysisOverlay?.result, data.document],
+    () => (data.analysisOverlay?.result ? createAnalysisResultIndex(data.document, data.analysisOverlay.result, data.analysisOverlay.viewId) : null),
+    [data.analysisOverlay?.result, data.analysisOverlay?.viewId, data.document],
   );
   const { node } = data;
   if (!node) return null;
