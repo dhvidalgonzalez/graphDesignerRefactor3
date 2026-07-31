@@ -89,6 +89,9 @@ function IssueList({ title, items, tone }) {
         <div className="analysis-issue" key={`${item.code}-${item.componentId ?? "general"}-${index}`}>
           <strong>{item.code}</strong>
           <span>{item.message}</span>
+          {item.diagramName && (
+            <small>{item.diagramName}{item.componentName ? ` / ${item.componentName}` : ""}</small>
+          )}
           {item.componentId && <code>{item.componentId}</code>}
         </div>
       ))}
@@ -625,6 +628,8 @@ function ExecutionTab({
   const [historyLoading, setHistoryLoading] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [preparation, setPreparation] = useState(null);
+  const [preparedValidation, setPreparedValidation] = useState(null);
 
   const validation = useMemo(
     () => evaluateAnalysisReadinessForType(document, analysisType, analysisOptions),
@@ -689,8 +694,24 @@ function ExecutionTab({
           || (Boolean(study.multiDiagram) && study.projectId === activeProject?.id);
         if (!belongsToActiveScope) throw new Error("El resultado pertenece a otro proyecto o diagrama.");
         if (activate) {
-          editorActions.activateAnalysisResult(study, parsed);
-          setMessage("Resultado activo sobre el diagrama.");
+          let visualElectricalModel = null;
+          if (study.inputStorageKey) {
+            try {
+              const inputArtifact = await loadAnalysisArtifactTextService(study.id, "INPUT");
+              const input = JSON.parse(inputArtifact.text);
+              visualElectricalModel = input?.electricalModel ?? null;
+            } catch (inputError) {
+              console.warn(
+                "No fue posible recuperar el mapa eléctrico usado por el estudio.",
+                inputError,
+              );
+            }
+          }
+          editorActions.activateAnalysisResult(study, {
+            ...parsed,
+            ...(visualElectricalModel ? { visualElectricalModel } : {}),
+          });
+          setMessage("Resultado activo sobre los componentes visibles de esta hoja.");
         } else setMessage("result.json descargado desde S3.");
         return parsed;
       }
@@ -736,31 +757,65 @@ function ExecutionTab({
     if (!activeProject?.id || !activeDiagram?.id) return;
     setBusy(true);
     setError("");
+    setPreparedValidation(null);
+    setPreparation(null);
     setMessage(activeProject.multiDiagram
-      ? "Guardando las hojas pendientes del proyecto…"
+      ? "Guardando la hoja activa antes de preparar el proyecto…"
       : "Guardando la versión actual del diagrama…");
     try {
       editorActions.setPersistence("saving", "Guardando antes del análisis");
-      const expectedDiagramVersions = Object.fromEntries(
-        activeProject.diagrams.map((sheet) => [sheet.id, Number(sheet.storageVersion ?? 0)]),
+      const activeSaved = await workspaceActions.saveDiagramDocument(
+        activeProject.id,
+        activeDiagram.id,
+        sourceDocument,
       );
-      const sheetsToSave = activeProject.multiDiagram
-        ? activeProject.diagrams.filter((sheet) => (
-            sheet.id === activeDiagram.id || (sheet.recoveredDraft && sheet.document)
-          ))
-        : activeProject.diagrams.filter((sheet) => sheet.id === activeDiagram.id);
-      let activeSaved = null;
-      for (const sheet of sheetsToSave) {
-        const saved = await workspaceActions.saveDiagramDocument(
-          activeProject.id,
-          sheet.id,
-          sheet.id === activeDiagram.id ? sourceDocument : sheet.document,
-        );
-        expectedDiagramVersions[sheet.id] = Number(saved.storageVersion);
-        if (sheet.id === activeDiagram.id) activeSaved = saved;
-      }
-      if (!activeSaved) throw new Error("No fue posible guardar la hoja activa antes del análisis.");
       editorActions.setPersistence("saved", "Guardado en la nube");
+
+      let expectedDiagramVersions = {
+        [activeDiagram.id]: Number(activeSaved.storageVersion),
+      };
+      let preparedDocument = document;
+
+      if (activeProject.multiDiagram) {
+        setMessage("");
+        setPreparation({ completed: 0, total: activeProject.diagrams.length, diagramName: "" });
+        const prepared = await workspaceActions.prepareProjectAnalysis({
+          activeDiagramId: activeDiagram.id,
+          activeDocument: sourceDocument,
+          onProgress: (progress) => {
+            setPreparation(progress);
+          },
+        });
+        expectedDiagramVersions = prepared.diagramVersions;
+        preparedDocument = buildProjectAnalysisDocument(
+          prepared.projectSnapshot,
+          activeDiagram.id,
+        );
+        if (!preparedDocument) {
+          throw new Error("No fue posible construir el modelo eléctrico global del proyecto.");
+        }
+
+        const normalizedOptions = normalizeAnalysisOptions(analysisType, analysisOptions);
+        const projectValidation = evaluateAnalysisReadinessForType(
+          preparedDocument,
+          analysisType,
+          normalizedOptions,
+        );
+        setPreparedValidation({
+          readiness: projectValidation.readiness,
+          errors: projectValidation.errors,
+          warnings: projectValidation.warnings,
+          statistics: projectValidation.statistics,
+        });
+        if (projectValidation.readiness === "NOT_READY") {
+          setPreparation(null);
+          setError(
+            `El proyecto multidiagrama contiene ${projectValidation.errors.length} error(es) bloqueante(s). Revisa las hojas y componentes indicados.`,
+          );
+          return;
+        }
+      }
+
       setMessage("Creando el estudio y enviándolo al solver…");
       const normalizedOptions = normalizeAnalysisOptions(analysisType, analysisOptions);
       const request = await startAnalysisService({
@@ -779,18 +834,26 @@ function ExecutionTab({
       const study = await getAnalysisStudyService(request.studyId);
       if (study) showStudy(study);
       setMessage(request.message || "Estudio enviado al solver.");
+      setPreparation(null);
       await refreshHistory();
     } catch (nextError) {
       editorActions.setPersistence("error", "No se pudo iniciar el análisis");
       setError(nextError instanceof Error ? nextError.message : String(nextError));
     } finally {
+      setPreparation(null);
       setBusy(false);
     }
   };
 
   const selectedCase = getOperatingCase(document, selectedCaseId);
-  const canRun = Boolean(activeProject?.canEdit && activeDiagram?.id && validation.readiness !== "NOT_READY" && !busy);
+  const canRun = Boolean(
+    activeProject?.canEdit
+    && activeDiagram?.id
+    && !busy
+    && (activeProject.multiDiagram || validation.readiness !== "NOT_READY"),
+  );
   const status = currentStudy?.status;
+  const displayedValidation = preparedValidation ?? validation;
 
   return (
     <div className="analysis-tab-content">
@@ -821,7 +884,7 @@ function ExecutionTab({
           </select>
         </label>
         <AnalysisSpecificOptions analysisType={analysisType} value={analysisOptions} onChange={setAnalysisOptions} document={document} validation={validation} />
-        <AnalysisSummary validation={validation} />
+        <AnalysisSummary validation={displayedValidation} />
         <div className="read-only-grid analysis-run-summary">
           <span>Análisis</span><strong>{analysisType}</strong>
           <span>Versión actual</span><strong>{activeDiagram?.storageVersion ?? 0}</strong>
@@ -830,13 +893,43 @@ function ExecutionTab({
           <span>Proveedor</span><strong>Lambda Docker</strong>
         </div>
         <button className="button button--primary analysis-run-button" type="button" disabled={!canRun} onClick={runAnalysis}>
-          {busy ? "Procesando…" : "Guardar y ejecutar análisis"}
+          {busy
+            ? "Procesando…"
+            : activeProject?.multiDiagram
+              ? "Preparar y ejecutar proyecto"
+              : "Guardar y ejecutar análisis"}
         </button>
         {!activeProject?.canEdit && <p className="analysis-phase-note">Se necesita permiso de edición para ejecutar estudios.</p>}
-        {validation.readiness === "NOT_READY" && <p className="analysis-phase-note analysis-phase-note--error">Corrige los errores bloqueantes antes de ejecutar.</p>}
+        {activeProject?.multiDiagram ? (
+          <p className="analysis-phase-note">
+            Al ejecutar se descargarán temporalmente todas las hojas, se construirá una única red y se realizará la validación global antes de llamar al solver.
+          </p>
+        ) : validation.readiness === "NOT_READY" ? (
+          <p className="analysis-phase-note analysis-phase-note--error">Corrige los errores bloqueantes antes de ejecutar.</p>
+        ) : null}
       </section>
 
+      {preparation && (
+        <section className="analysis-preparation-progress" role="status" aria-live="polite">
+          <span className="loading-spinner" aria-hidden="true" />
+          <div>
+            <strong>Preparando análisis multidiagrama</strong>
+            <span>
+              Cargando y verificando hojas {preparation.completed}/{preparation.total}
+              {preparation.diagramName ? ` · ${preparation.diagramName}` : ""}
+            </span>
+          </div>
+        </section>
+      )}
+
       {(message || error) && <section className={`analysis-operation-message ${error ? "analysis-operation-message--error" : ""}`}>{error || message}</section>}
+
+      {preparedValidation?.readiness === "NOT_READY" && (
+        <>
+          <IssueList title="Errores del proyecto multidiagrama" items={preparedValidation.errors} tone="error" />
+          <IssueList title="Advertencias del proyecto multidiagrama" items={preparedValidation.warnings} tone="warning" />
+        </>
+      )}
 
       {currentStudy && (
         <section className="analysis-section-card">

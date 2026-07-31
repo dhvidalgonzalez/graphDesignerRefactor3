@@ -23,6 +23,7 @@ export function normalizeCurrentDiagram(candidate) {
       ports: raw.ports ?? [],
       properties: raw.properties ?? raw.attributes ?? {},
       parameterMetadata: raw.parameterMetadata ?? {},
+      logicalConnections: raw.logicalConnections ?? {},
     });
     applyDefaultNodeVoltageLevels(base, node);
     return [node.id, node];
@@ -37,6 +38,7 @@ export function normalizeCurrentDiagram(candidate) {
       vertices: raw.vertices ?? [],
       properties: raw.properties ?? {},
       parameterMetadata: raw.parameterMetadata ?? {},
+      logicalConnections: raw.logicalConnections ?? {},
     });
     return [edge.id, edge];
   }));

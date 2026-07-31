@@ -24,6 +24,21 @@ function routeToEditor(id) {
   setRoute(`#/workspace/projects/${encodeURIComponent(id)}/editor`);
 }
 
+function mergeProjectConnectionCatalogs(current, catalogProject) {
+  if (!current || current.id !== catalogProject?.id) return current;
+  const catalogByDiagram = new Map(
+    catalogProject.diagrams.map((sheet) => [sheet.id, sheet.connectionCatalog]),
+  );
+  return {
+    ...current,
+    diagrams: current.diagrams.map((sheet) => ({
+      ...sheet,
+      connectionCatalog:
+        catalogByDiagram.get(sheet.id) ?? sheet.connectionCatalog ?? null,
+    })),
+  };
+}
+
 export function WorkspaceProvider({ children }) {
   const { session, profile, workspace, signOut } = useSession();
   const repository = useMemo(
@@ -39,6 +54,9 @@ export function WorkspaceProvider({ children }) {
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
   const [inviteMembersOpen, setInviteMembersOpen] = useState(false);
   const [shareProjectOpen, setShareProjectOpen] = useState(false);
+  const [connectionCatalogStatus, setConnectionCatalogStatus] = useState("idle");
+  const [connectionCatalogProgress, setConnectionCatalogProgress] = useState(null);
+  const [connectionCatalogError, setConnectionCatalogError] = useState(null);
   const activeProjectId = activeProject?.id ?? null;
 
   const refreshInvitations = useCallback(async () => {
@@ -111,6 +129,9 @@ export function WorkspaceProvider({ children }) {
 
   const openWorkspace = useCallback(() => {
     setActiveProject(null);
+    setConnectionCatalogStatus("idle");
+    setConnectionCatalogProgress(null);
+    setConnectionCatalogError(null);
     setProjectSettingsOpen(false);
     setInviteMembersOpen(false);
     setShareProjectOpen(false);
@@ -125,13 +146,37 @@ export function WorkspaceProvider({ children }) {
 
   const openProjectEditor = useCallback(async (id, diagramId = null) => {
     const targetDiagramId = diagramId || activeProject?.activeDiagramId || null;
-    const project = await repository.get(id, { loadDiagramId: targetDiagramId });
+    let project = await repository.get(id, { loadDiagramId: targetDiagramId });
     if (!project) return null;
     if (!project.diagrams.some((sheet) => sheet.document)) {
       throw new Error("No fue posible cargar el documento de la hoja seleccionada.");
     }
     setActiveProject(project);
     routeToEditor(project.id);
+
+    if (project.multiDiagram) {
+      setConnectionCatalogStatus("loading");
+      setConnectionCatalogError(null);
+      setConnectionCatalogProgress(null);
+      repository.ensureProjectConnectionCatalog(project, {
+          onProgress: setConnectionCatalogProgress,
+        })
+        .then((catalogProject) => {
+          setActiveProject((current) => mergeProjectConnectionCatalogs(current, catalogProject));
+          setConnectionCatalogStatus("ready");
+        })
+        .catch((catalogError) => {
+          console.warn("No fue posible completar el catálogo multidiagrama.", catalogError);
+          setConnectionCatalogStatus("error");
+          setConnectionCatalogError(
+            catalogError instanceof Error ? catalogError : new Error(String(catalogError)),
+          );
+        });
+    } else {
+      setConnectionCatalogStatus("idle");
+      setConnectionCatalogProgress(null);
+      setConnectionCatalogError(null);
+    }
     return project;
   }, [activeProject?.activeDiagramId, repository]);
 
@@ -148,6 +193,9 @@ export function WorkspaceProvider({ children }) {
 
   const closeProject = useCallback(() => {
     setActiveProject(null);
+    setConnectionCatalogStatus("idle");
+    setConnectionCatalogProgress(null);
+    setConnectionCatalogError(null);
     setProjectSettingsOpen(false);
     setInviteMembersOpen(false);
     setShareProjectOpen(false);
@@ -157,6 +205,9 @@ export function WorkspaceProvider({ children }) {
 
   const goHome = useCallback(() => {
     setActiveProject(null);
+    setConnectionCatalogStatus("idle");
+    setConnectionCatalogProgress(null);
+    setConnectionCatalogError(null);
     setProjectSettingsOpen(false);
     setInviteMembersOpen(false);
     setShareProjectOpen(false);
@@ -169,9 +220,73 @@ export function WorkspaceProvider({ children }) {
     setActiveProject((current) => current?.id === activeProjectId
       ? { ...current, ...patch, updatedAt: updatedRecord.updatedAt ?? new Date().toISOString(), cloudRecord: updatedRecord }
       : current);
+    if (patch.multiDiagram != null) {
+      setConnectionCatalogStatus("idle");
+      setConnectionCatalogProgress(null);
+      setConnectionCatalogError(null);
+    }
     await refreshSummaries();
     return updatedRecord;
   }, [activeProjectId, refreshSummaries, repository]);
+
+  const refreshProjectConnectionCatalog = useCallback(async ({ force = false } = {}) => {
+    if (!activeProject?.multiDiagram) return activeProject;
+    setConnectionCatalogStatus("loading");
+    setConnectionCatalogError(null);
+    setConnectionCatalogProgress(null);
+    try {
+      const updated = await repository.ensureProjectConnectionCatalog(activeProject, {
+        force,
+        onProgress: setConnectionCatalogProgress,
+      });
+      setActiveProject((current) => mergeProjectConnectionCatalogs(current, updated));
+      setConnectionCatalogStatus("ready");
+      return updated;
+    } catch (nextError) {
+      const normalized = nextError instanceof Error ? nextError : new Error(String(nextError));
+      setConnectionCatalogStatus("error");
+      setConnectionCatalogError(normalized);
+      throw normalized;
+    }
+  }, [activeProject, repository]);
+
+  const prepareProjectAnalysis = useCallback(async ({
+    activeDiagramId,
+    activeDocument,
+    onProgress,
+  } = {}) => {
+    if (!activeProject) throw new Error("No se encontró el proyecto activo.");
+    const prepared = await repository.prepareProjectAnalysis(activeProject, {
+      activeDiagramId,
+      activeDocument,
+      onProgress,
+    });
+    setActiveProject((current) => {
+      if (current?.id !== activeProject.id) return current;
+      const preparedById = new Map(
+        prepared.projectSnapshot.diagrams.map((sheet) => [sheet.id, sheet]),
+      );
+      return {
+        ...current,
+        diagrams: current.diagrams.map((sheet) => {
+          const preparedSheet = preparedById.get(sheet.id);
+          if (!preparedSheet) return sheet;
+          return {
+            ...sheet,
+            name: preparedSheet.name,
+            storageKey: preparedSheet.storageKey,
+            storageVersion: preparedSheet.storageVersion,
+            documentBytes: preparedSheet.documentBytes,
+            documentChecksum: preparedSheet.documentChecksum,
+            lastSavedAt: preparedSheet.lastSavedAt,
+            updatedAt: preparedSheet.updatedAt,
+            connectionCatalog: preparedSheet.connectionCatalog,
+          };
+        }),
+      };
+    });
+    return prepared;
+  }, [activeProject, repository]);
 
   const saveDraft = useCallback((projectId, diagramId, document) => {
     const sheet = activeProject?.id === projectId
@@ -265,6 +380,7 @@ export function WorkspaceProvider({ children }) {
               documentBytes: updated.documentBytes,
               documentChecksum: updated.documentChecksum,
               lastSavedAt: updated.lastSavedAt,
+              connectionCatalog: updated.connectionCatalog ?? sheet.connectionCatalog,
               document: structuredClone(document),
             }
           : sheet),
@@ -295,8 +411,38 @@ export function WorkspaceProvider({ children }) {
 
   const selectDiagram = useCallback(async (diagramId) => {
     if (!activeProject || !activeProject.diagrams.some((sheet) => sheet.id === diagramId)) return null;
-    const project = await repository.selectDiagram(activeProject, diagramId);
+    const previousCatalogs = new Map(
+      activeProject.diagrams.map((sheet) => [sheet.id, sheet.connectionCatalog]),
+    );
+    let project = await repository.selectDiagram(activeProject, diagramId);
+    project = {
+      ...project,
+      diagrams: project.diagrams.map((sheet) => ({
+        ...sheet,
+        connectionCatalog:
+          sheet.connectionCatalog ?? previousCatalogs.get(sheet.id) ?? null,
+      })),
+    };
     setActiveProject(project);
+    if (project.multiDiagram) {
+      setConnectionCatalogStatus("loading");
+      setConnectionCatalogError(null);
+      setConnectionCatalogProgress(null);
+      repository.ensureProjectConnectionCatalog(project, {
+          onProgress: setConnectionCatalogProgress,
+        })
+        .then((catalogProject) => {
+          setActiveProject((current) => mergeProjectConnectionCatalogs(current, catalogProject));
+          setConnectionCatalogStatus("ready");
+        })
+        .catch((catalogError) => {
+          console.warn("No fue posible actualizar el catálogo multidiagrama.", catalogError);
+          setConnectionCatalogStatus("error");
+          setConnectionCatalogError(
+            catalogError instanceof Error ? catalogError : new Error(String(catalogError)),
+          );
+        });
+    }
     return project;
   }, [activeProject, repository]);
 
@@ -444,6 +590,8 @@ export function WorkspaceProvider({ children }) {
     closeProject,
     goHome,
     updateProject,
+    refreshProjectConnectionCatalog,
+    prepareProjectAnalysis,
     saveDraft,
     saveDiagramDocument,
     checkForRemoteChanges,
@@ -479,6 +627,8 @@ export function WorkspaceProvider({ children }) {
     closeProject,
     goHome,
     updateProject,
+    refreshProjectConnectionCatalog,
+    prepareProjectAnalysis,
     saveDraft,
     saveDiagramDocument,
     checkForRemoteChanges,
@@ -519,6 +669,9 @@ export function WorkspaceProvider({ children }) {
     createProjectOpen,
     inviteMembersOpen,
     shareProjectOpen,
+    connectionCatalogStatus,
+    connectionCatalogProgress,
+    connectionCatalogError,
     actions,
   }), [
     projectSummaries,
@@ -533,6 +686,9 @@ export function WorkspaceProvider({ children }) {
     createProjectOpen,
     inviteMembersOpen,
     shareProjectOpen,
+    connectionCatalogStatus,
+    connectionCatalogProgress,
+    connectionCatalogError,
     actions,
   ]);
 

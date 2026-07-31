@@ -1,6 +1,11 @@
 import { createEmptyDiagram } from "../../domain/diagram/createDiagram.js";
 import { createSampleDiagram } from "../../domain/diagram/sampleDiagram.js";
 import { createId } from "../../utils/id.js";
+import {
+  createDiagramConnectionCatalog,
+  remapInternalDiagramReferences,
+  removeLogicalConnectionsToDiagram,
+} from "../../domain/electrical/projectTopology.js";
 import { identityValues } from "../../services/api/helpers/index.js";
 import listProjectsService from "../../services/project/list/index.js";
 import getProjectService from "../../services/project/get/index.js";
@@ -65,6 +70,7 @@ function sheetFromRecord(record, document = null) {
     lastSavedAt: record.lastSavedAt || null,
     position: record.position ?? 0,
     document: normalizedDocument,
+    connectionCatalog: null,
   };
 }
 
@@ -98,6 +104,7 @@ function summaryFromRecord(record, session) {
     name: record.name,
     description: record.description || "",
     diagramCount: record.diagramCount ?? 0,
+    multiDiagram: Boolean(record.multiDiagram),
     memberCount: record.memberCount ?? 1,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
@@ -120,6 +127,7 @@ export class AmplifyProjectRepository {
     this.session = session;
     this.profile = profile;
     this.workspace = workspace;
+    this.connectionCatalogCache = new Map();
   }
 
   async list() {
@@ -155,11 +163,155 @@ export class AmplifyProjectRepository {
       draftTime > remoteTime,
     );
 
+
     return {
       document: useDraft ? draft.document : remoteDocument,
       recoveredDraft: useDraft,
       staleDraft: Boolean(draft?.document && !draftMatchesRemote),
       remoteVersion,
+    };
+  }
+
+  catalogCacheKey(projectId, diagramId, storageVersion) {
+    return `${projectId}:${diagramId}:${Number(storageVersion ?? 0)}`;
+  }
+
+  cacheConnectionCatalog(projectId, diagramRecord, document) {
+    const catalog = createDiagramConnectionCatalog(document, {
+      diagramId: diagramRecord.id,
+      diagramName: diagramRecord.name || document?.name,
+    });
+    if (!catalog) return null;
+    this.connectionCatalogCache.set(
+      this.catalogCacheKey(projectId, diagramRecord.id, diagramRecord.storageVersion),
+      catalog,
+    );
+    return catalog;
+  }
+
+  getCachedConnectionCatalog(projectId, diagramRecord) {
+    return this.connectionCatalogCache.get(
+      this.catalogCacheKey(projectId, diagramRecord.id, diagramRecord.storageVersion),
+    ) ?? null;
+  }
+
+  async ensureProjectConnectionCatalog(project, { force = false, onProgress = null } = {}) {
+    if (!project?.multiDiagram) return project;
+    const diagrams = [];
+    const total = project.diagrams.length;
+    let completed = 0;
+
+    for (const sheet of project.diagrams) {
+      let connectionCatalog = !force ? sheet.connectionCatalog : null;
+      if (!connectionCatalog && sheet.document) {
+        connectionCatalog = createDiagramConnectionCatalog(sheet.document, {
+          diagramId: sheet.id,
+          diagramName: sheet.name,
+        });
+      }
+      if (!connectionCatalog && !force) {
+        connectionCatalog = this.getCachedConnectionCatalog(project.id, sheet);
+      }
+      if (!connectionCatalog) {
+        try {
+          const loaded = await this.loadDocument(project.id, sheet);
+          connectionCatalog = this.cacheConnectionCatalog(project.id, sheet, loaded.document);
+        } catch (error) {
+          throw new Error(
+            `No fue posible cargar los componentes de “${sheet.name}”: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      } else {
+        this.connectionCatalogCache.set(
+          this.catalogCacheKey(project.id, sheet.id, sheet.storageVersion),
+          connectionCatalog,
+        );
+      }
+      completed += 1;
+      onProgress?.({ completed, total, diagramId: sheet.id, diagramName: sheet.name });
+      diagrams.push({ ...sheet, connectionCatalog });
+    }
+
+    return { ...project, diagrams };
+  }
+
+  async prepareProjectAnalysis(project, {
+    activeDiagramId,
+    activeDocument,
+    onProgress = null,
+  } = {}) {
+    if (!project?.id) throw new Error("No se encontró el proyecto activo.");
+    const diagramRecords = await listDiagramsByProjectService(project.id);
+    if (!diagramRecords.length) throw new Error("El proyecto no contiene diagramas para analizar.");
+
+    const total = diagramRecords.length;
+    const sheets = [];
+    const savedDraftDiagramIds = [];
+    let completed = 0;
+
+    for (const record of diagramRecords) {
+      let currentRecord = record;
+      let document;
+
+      if (record.id === activeDiagramId && activeDocument) {
+        document = structuredClone(activeDocument);
+      } else {
+        let loaded;
+        try {
+          loaded = await this.loadDocument(project.id, record);
+        } catch (error) {
+          throw new Error(
+            `No fue posible preparar la hoja “${record.name}”: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+        document = loaded.document;
+        if (loaded.recoveredDraft && project.canEdit) {
+          const metadata = await saveDiagramDocumentService(project.id, record.id, document);
+          currentRecord = await updateDiagramService({
+            id: record.id,
+            name: document.name || record.name,
+            ...metadata,
+            storageVersion: Number(record.storageVersion ?? 0) + 1,
+          });
+          localDiagramDraftRepository.remove({
+            userId: this.session.userId,
+            projectId: project.id,
+            diagramId: record.id,
+          });
+          savedDraftDiagramIds.push(record.id);
+        }
+      }
+
+      const connectionCatalog = this.cacheConnectionCatalog(
+        project.id,
+        currentRecord,
+        document,
+      );
+      sheets.push({
+        ...sheetFromRecord(currentRecord, document),
+        connectionCatalog,
+      });
+      completed += 1;
+      onProgress?.({
+        completed,
+        total,
+        diagramId: record.id,
+        diagramName: record.name,
+        recoveredDraft: savedDraftDiagramIds.includes(record.id),
+      });
+    }
+
+    const activeSheet = sheets.find((sheet) => sheet.id === activeDiagramId) ?? sheets[0];
+    return {
+      projectSnapshot: {
+        ...project,
+        activeDiagramId: activeSheet.id,
+        diagrams: sheets,
+      },
+      diagramVersions: Object.fromEntries(
+        sheets.map((sheet) => [sheet.id, Number(sheet.storageVersion ?? 0)]),
+      ),
+      savedDraftDiagramIds,
     };
   }
 
@@ -183,6 +335,15 @@ export class AmplifyProjectRepository {
       if (activeRecord) loaded = await this.loadDocument(projectId, activeRecord);
     }
 
+    const diagrams = diagramRecords.map((record) => {
+      const document = record.id === activeDiagramId ? loaded?.document : null;
+      const sheet = sheetFromRecord(record, document);
+      const connectionCatalog = document
+        ? this.cacheConnectionCatalog(projectId, record, document)
+        : this.getCachedConnectionCatalog(projectId, record);
+      return { ...sheet, connectionCatalog };
+    });
+
     const role = roleForProject(projectRecord, this.session);
     const members = memberRecords.map(memberFromRecord);
     const owner = {
@@ -203,16 +364,14 @@ export class AmplifyProjectRepository {
       workspaceId: projectRecord.workspaceId,
       name: projectRecord.name,
       description: projectRecord.description || "",
+      multiDiagram: Boolean(projectRecord.multiDiagram),
       createdAt: projectRecord.createdAt,
       updatedAt: projectRecord.updatedAt,
       activeDiagramId,
       owner,
       members,
       invitations: invitationRecords,
-      diagrams: diagramRecords.map((record) => sheetFromRecord(
-        record,
-        record.id === activeDiagramId ? loaded?.document : null,
-      )),
+      diagrams,
       role,
       canEdit: role === "owner" || role === "editor",
       canManage: role === "owner",
@@ -224,7 +383,7 @@ export class AmplifyProjectRepository {
     };
   }
 
-  async create({ name, description = "", sample = false }) {
+  async create({ name, description = "", sample = false, multiDiagram = false }) {
     const projectId = createId("project");
     const diagramId = createId("diagram");
     const diagramName = sample ? "Diagrama de demostración" : "Diagrama 1";
@@ -239,6 +398,7 @@ export class AmplifyProjectRepository {
       workspaceId: this.workspace.id,
       name: String(name || "Proyecto sin nombre").trim() || "Proyecto sin nombre",
       description: String(description || "").trim(),
+      multiDiagram: Boolean(multiDiagram),
       status: "ACTIVE",
       activeDiagramId: diagramId,
       ownerProfileId: this.profile.id,
@@ -314,6 +474,7 @@ export class AmplifyProjectRepository {
       id: projectId,
       ...(patch.name != null ? { name: String(patch.name).trim() || "Proyecto sin nombre" } : {}),
       ...(patch.description != null ? { description: String(patch.description).trim() } : {}),
+      ...(patch.multiDiagram != null ? { multiDiagram: Boolean(patch.multiDiagram) } : {}),
     });
     return updated;
   }
@@ -344,8 +505,9 @@ export class AmplifyProjectRepository {
       ...metadata,
       storageVersion: (current.storageVersion ?? 0) + 1,
     });
+    const connectionCatalog = this.cacheConnectionCatalog(projectId, updated, document);
     localDiagramDraftRepository.remove({ userId: this.session.userId, projectId, diagramId });
-    return updated;
+    return { ...updated, connectionCatalog };
   }
 
   saveDraft(projectId, diagramId, document, { baseStorageVersion = null } = {}) {
@@ -373,8 +535,13 @@ export class AmplifyProjectRepository {
       projectId,
       diagramId,
     });
+    const connectionCatalog = this.cacheConnectionCatalog(
+      projectId,
+      record,
+      loaded.document,
+    );
     return {
-      sheet: sheetFromRecord(record, loaded.document),
+      sheet: { ...sheetFromRecord(record, loaded.document), connectionCatalog },
       document: loaded.document,
     };
   }
@@ -386,7 +553,7 @@ export class AmplifyProjectRepository {
     const document = sample
       ? { ...createSampleDiagram(), id: diagramId, name }
       : createEmptyDiagram({ id: diagramId, name });
-    const record = await createDiagramService({
+    await createDiagramService({
       id: diagramId,
       projectId: project.id,
       name,
@@ -402,9 +569,10 @@ export class AmplifyProjectRepository {
     });
     try {
       const metadata = await saveDiagramDocumentService(project.id, diagramId, document);
-      await updateDiagramService({ id: diagramId, ...metadata, storageVersion: 1 });
+      const updated = await updateDiagramService({ id: diagramId, ...metadata, storageVersion: 1 });
+      const connectionCatalog = this.cacheConnectionCatalog(project.id, updated, document);
       await syncProjectDiagramsService(project.id, diagramId);
-      return { ...sheetFromRecord({ ...record, ...metadata, storageVersion: 1 }), document };
+      return { ...sheetFromRecord(updated, document), connectionCatalog };
     } catch (error) {
       try { await removeDiagramDocumentService(project.id, diagramId); } catch { /* limpieza por mejor esfuerzo */ }
       try { await deleteDiagramService(diagramId); } catch { /* limpieza por mejor esfuerzo */ }
@@ -434,10 +602,14 @@ export class AmplifyProjectRepository {
       ?? (await this.loadDocument(project.id, source)).document;
     const copyId = createId("diagram");
     const copyName = `${source.name} copia`;
-    const copyDocument = structuredClone(sourceDocument);
+    const copyDocument = remapInternalDiagramReferences(
+      sourceDocument,
+      source.id,
+      copyId,
+    );
     copyDocument.id = copyId;
     copyDocument.name = copyName;
-    const record = await createDiagramService({
+    await createDiagramService({
       id: copyId,
       projectId: project.id,
       name: copyName,
@@ -453,9 +625,10 @@ export class AmplifyProjectRepository {
     });
     try {
       const metadata = await saveDiagramDocumentService(project.id, copyId, copyDocument);
-      await updateDiagramService({ id: copyId, ...metadata, storageVersion: 1 });
+      const updated = await updateDiagramService({ id: copyId, ...metadata, storageVersion: 1 });
+      const connectionCatalog = this.cacheConnectionCatalog(project.id, updated, copyDocument);
       await syncProjectDiagramsService(project.id, copyId);
-      return { ...sheetFromRecord({ ...record, ...metadata, storageVersion: 1 }), document: copyDocument };
+      return { ...sheetFromRecord(updated, copyDocument), connectionCatalog };
     } catch (error) {
       try { await removeDiagramDocumentService(project.id, copyId); } catch { /* limpieza por mejor esfuerzo */ }
       try { await deleteDiagramService(copyId); } catch { /* limpieza por mejor esfuerzo */ }
@@ -468,6 +641,18 @@ export class AmplifyProjectRepository {
     if (project.diagrams.length <= 1) throw new Error("El proyecto debe conservar al menos una hoja.");
     const index = project.diagrams.findIndex((item) => item.id === diagramId);
     if (index < 0) return null;
+
+    for (const sheet of project.diagrams) {
+      if (sheet.id === diagramId) continue;
+      const sourceDocument = sheet.document
+        ?? (await this.loadDocument(project.id, sheet)).document;
+      const cleaned = removeLogicalConnectionsToDiagram(sourceDocument, diagramId);
+      if (!cleaned.removedCount) continue;
+      await this.saveDiagramDocument(project.id, sheet.id, cleaned.document, {
+        expectedStorageVersion: sheet.storageVersion ?? null,
+      });
+    }
+
     await removeDiagramDocumentService(project.id, diagramId);
     await deleteDiagramService(diagramId);
     const remaining = project.diagrams.filter((item) => item.id !== diagramId);

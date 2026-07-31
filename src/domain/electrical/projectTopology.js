@@ -48,6 +48,13 @@ function loadedSheets(projectOrSheets) {
   return sheets.filter((sheet) => sheet?.id && sheet?.document);
 }
 
+function catalogSheets(projectOrSheets) {
+  const sheets = Array.isArray(projectOrSheets)
+    ? projectOrSheets
+    : projectOrSheets?.diagrams ?? [];
+  return sheets.filter((sheet) => sheet?.id && (sheet?.document || sheet?.connectionCatalog));
+}
+
 export function globalComponentId(diagramId, componentId) {
   return `${String(diagramId)}${GLOBAL_SEPARATOR}${String(componentId)}`;
 }
@@ -207,62 +214,145 @@ function electricalNode(node) {
   }
 }
 
-export function buildProjectComponentCatalog(projectOrSheets) {
-  return loadedSheets(projectOrSheets).map((sheet) => {
-    const document = sheet.document;
-    const components = [
+function catalogComponentFromNode(document, diagramId, diagramName, node) {
+  const terminals = getEntityTerminalDescriptors(document, "node", node.id);
+  const isBus = node.type === "ElmTerm";
+  return {
+    diagramId,
+    diagramName,
+    entityKind: "node",
+    entityId: node.id,
+    componentName: node.properties?.name || node.id,
+    componentType: getSymbolDefinition(node.type).displayName,
+    componentTypeId: node.type,
+    isBus,
+    sharedAcrossDiagrams: isBus && Boolean(node.properties?.crossDiagramVisible),
+    terminals: isBus && terminals.length
+      ? [{ ...terminals[0], label: "Barra / nodo eléctrico" }]
+      : terminals,
+  };
+}
+
+function catalogComponentFromEdge(document, diagramId, diagramName, edge) {
+  return {
+    diagramId,
+    diagramName,
+    entityKind: "edge",
+    entityId: edge.id,
+    componentName: edge.properties?.name || "Línea eléctrica",
+    componentType: "Línea eléctrica",
+    componentTypeId: "LINE",
+    isBus: false,
+    sharedAcrossDiagrams: false,
+    terminals: getEntityTerminalDescriptors(document, "edge", edge.id),
+  };
+}
+
+export function createDiagramConnectionCatalog(document, {
+  diagramId = document?.id,
+  diagramName = document?.name,
+} = {}) {
+  if (!document || !diagramId) return null;
+  const normalizedDiagramName = String(diagramName || document.name || diagramId);
+  return {
+    schemaVersion: 1,
+    diagramId: String(diagramId),
+    diagramName: normalizedDiagramName,
+    components: [
       ...Object.values(document.nodes ?? {})
         .filter(electricalNode)
-        .map((node) => {
-          const terminals = getEntityTerminalDescriptors(document, "node", node.id);
-          return {
-            diagramId: sheet.id,
-            diagramName: sheet.name || document.name || sheet.id,
-            entityKind: "node",
-            entityId: node.id,
-            componentName: node.properties?.name || node.id,
-            componentType: getSymbolDefinition(node.type).displayName,
-            terminals: node.type === "ElmTerm" && terminals.length
-              ? [{ ...terminals[0], label: "Barra / nodo eléctrico" }]
-              : terminals,
-          };
-        }),
+        .map((node) => catalogComponentFromNode(
+          document,
+          String(diagramId),
+          normalizedDiagramName,
+          node,
+        )),
       ...Object.values(document.edges ?? {})
         .filter((edge) => edge.kind === "line")
-        .map((edge) => ({
+        .map((edge) => catalogComponentFromEdge(
+          document,
+          String(diagramId),
+          normalizedDiagramName,
+          edge,
+        )),
+    ],
+  };
+}
+
+function normalizeDiagramConnectionCatalog(candidate, sheet) {
+  if (!candidate || typeof candidate !== "object") return null;
+  const diagramId = String(candidate.diagramId || sheet?.id || "").trim();
+  if (!diagramId || !Array.isArray(candidate.components)) return null;
+  const diagramName = String(sheet?.name || candidate.diagramName || diagramId);
+  const components = candidate.components
+    .filter((component) => component && typeof component === "object")
+    .map((component) => ({
+      diagramId,
+      diagramName,
+      entityKind: component.entityKind === "edge" ? "edge" : "node",
+      entityId: String(component.entityId || ""),
+      componentName: String(component.componentName || component.entityId || "Componente"),
+      componentType: String(component.componentType || "Componente eléctrico"),
+      componentTypeId: String(component.componentTypeId || ""),
+      isBus: Boolean(component.isBus || component.componentTypeId === "ElmTerm"),
+      sharedAcrossDiagrams: Boolean(
+        component.sharedAcrossDiagrams
+        && (component.isBus || component.componentTypeId === "ElmTerm"),
+      ),
+      terminals: Array.isArray(component.terminals)
+        ? component.terminals
+          .filter((terminal) => terminal && terminal.key != null)
+          .map((terminal, index) => ({
+            key: String(terminal.key),
+            label: String(terminal.label || `Terminal ${index + 1}`),
+            modelTerminalId: String(
+              terminal.modelTerminalId
+              || `${component.entityId}:terminal:${String(terminal.key)}`,
+            ),
+          }))
+        : [],
+    }))
+    .filter((component) => component.entityId && component.terminals.length);
+  return { schemaVersion: 1, diagramId, diagramName, components };
+}
+
+export function buildProjectComponentCatalog(projectOrSheets) {
+  return catalogSheets(projectOrSheets).map((sheet) => {
+    const generated = sheet.document
+      ? createDiagramConnectionCatalog(sheet.document, {
           diagramId: sheet.id,
-          diagramName: sheet.name || document.name || sheet.id,
-          entityKind: "edge",
-          entityId: edge.id,
-          componentName: edge.properties?.name || "Línea eléctrica",
-          componentType: "Línea eléctrica",
-          terminals: getEntityTerminalDescriptors(document, "edge", edge.id),
-        })),
-    ];
-    return {
+          diagramName: sheet.name,
+        })
+      : null;
+    const catalog = normalizeDiagramConnectionCatalog(
+      generated ?? sheet.connectionCatalog,
+      sheet,
+    );
+    return catalog ?? {
       diagramId: sheet.id,
-      diagramName: sheet.name || document.name || sheet.id,
-      components,
+      diagramName: sheet.name || sheet.id,
+      components: [],
     };
   });
+}
+
+export function isSharedCrossDiagramComponent(component) {
+  return Boolean(component?.isBus && component?.sharedAcrossDiagrams);
 }
 
 export function resolveProjectConnectionLabel(projectOrSheets, reference) {
   const normalized = normalizeLogicalConnectionReference(reference);
   if (!normalized) return "Sin conexión lógica";
-  const sheet = loadedSheets(projectOrSheets).find((item) => item.id === normalized.diagramId);
+  const sheet = catalogSheets(projectOrSheets).find((item) => item.id === normalized.diagramId);
   if (!sheet) return "Referencia a diagrama inexistente";
-  const entity = normalized.entityKind === "edge"
-    ? sheet.document.edges?.[normalized.entityId]
-    : sheet.document.nodes?.[normalized.entityId];
-  if (!entity) return `${sheet.name} · componente inexistente`;
-  const name = entity.properties?.name || entity.id;
-  const terminal = getEntityTerminalDescriptors(
-    sheet.document,
-    normalized.entityKind,
-    normalized.entityId,
-  ).find((item) => item.key === normalized.terminalKey);
-  return `${sheet.name} · ${name}${terminal ? ` · ${terminal.label}` : ""}`;
+  const catalog = buildProjectComponentCatalog([sheet])[0];
+  const component = catalog?.components.find((item) => (
+    item.entityKind === normalized.entityKind
+    && item.entityId === normalized.entityId
+  ));
+  if (!component) return `${sheet.name} · componente inexistente`;
+  const terminal = component.terminals.find((item) => item.key === normalized.terminalKey);
+  return `${catalog.diagramName} · ${component.componentName}${terminal ? ` · ${terminal.label}` : ""}`;
 }
 
 function terminalLookupKey(diagramId, entityKind, entityId, terminalKey) {

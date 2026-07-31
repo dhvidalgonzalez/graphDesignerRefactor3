@@ -3,6 +3,7 @@ import { useMemo } from "react";
 import { shallowEqual, useEditorActions, useEditorSelector } from "../../editor/EditorContext.jsx";
 import { getEdgePoints } from "../../domain/diagram/edgeGeometry.js";
 import {
+  analysisEntityBelongsToDiagram,
   branchFlowArrowSegment,
   createAnalysisResultIndex,
   formatCurrentA,
@@ -13,7 +14,9 @@ import {
   getBranchPosition,
   getConnectionNodePosition,
   getEquipmentPosition,
+  getBusResultForNode,
   loadingColor,
+  localAnalysisEntityId,
   normalizeAnalysisOverlayOptions,
 } from "../../domain/analysis/analysisResults.js";
 
@@ -102,18 +105,13 @@ function ResultLabel({
   );
 }
 
-function busTitle(document, index, bus) {
-  const connectionNode = index.connectionNodeById.get(bus.connectionNodeId)
-    ?? index.connectionNodeById.get(bus.busId)
-    ?? index.connectionNodeByBusComponentId.get(bus.busId);
-  const visualNode = connectionNode?.busComponentId
-    ? document.nodes?.[connectionNode.busComponentId]
-    : document.nodes?.[bus.busId];
-  return visualNode?.properties?.name || connectionNode?.busComponentId || bus.busId || "Barra";
+function busTitle(node, bus) {
+  return node?.properties?.name || bus.busId || bus.connectionNodeId || "Barra";
 }
 
 function branchTitle(document, branch) {
-  return document.edges?.[branch.componentId]?.properties?.name || branch.componentId || "Línea";
+  const localId = localAnalysisEntityId(branch.componentId, document.id);
+  return document.edges?.[localId]?.properties?.name || localId || "Línea";
 }
 
 export default function AnalysisOverlayLayer() {
@@ -139,18 +137,30 @@ export default function AnalysisOverlayLayer() {
 
   const offsetFor = (id) => data.overlay?.labelOffsets?.[`${viewId || "network"}:${id}`] ?? { x: 0, y: 0 };
   const moveLabel = (id, offset) => actions.moveAnalysisResultLabel(`${viewId || "network"}:${id}`, offset);
+  const multiDiagramResult = Boolean(
+    data.overlay?.study?.multiDiagram
+    || rawResult.multiDiagram
+    || rawResult.visualElectricalModel,
+  );
+  const labelId = (kind, localId) => `${kind}:${multiDiagramResult ? `${data.document.id}:` : ""}${localId}`;
+  const visibleBusResults = Object.values(data.document.nodes ?? {})
+    .filter((node) => node.type === "ElmTerm")
+    .map((node) => ({ node, bus: getBusResultForNode(index, node.id) }))
+    .filter((item) => Boolean(item.bus));
 
   return (
     <>
       {options.showFlowArrows && result.branches.map((branch) => {
-        const edge = data.document.edges?.[branch.componentId];
+        if (!analysisEntityBelongsToDiagram(branch.componentId, data.document.id)) return null;
+        const localComponentId = localAnalysisEntityId(branch.componentId, data.document.id);
+        const edge = data.document.edges?.[localComponentId];
         if (!edge || branch.direction === "NONE") return null;
         const segment = branchFlowArrowSegment(getEdgePoints(data.document, edge), branch.direction);
         if (!segment) return null;
         const color = loadingColor(branch.loadingPercent, branch.status);
         return (
           <Arrow
-            key={`flow-${branch.componentId}`}
+            key={`flow-${localComponentId}`}
             points={[segment.start.x, segment.start.y, segment.end.x, segment.end.y]}
             stroke={color}
             fill={color}
@@ -162,10 +172,10 @@ export default function AnalysisOverlayLayer() {
         );
       })}
 
-      {result.buses.map((bus) => {
-        const position = getConnectionNodePosition(data.document, index, bus.connectionNodeId, bus.busId);
+      {visibleBusResults.map(({ node, bus }) => {
+        const position = getConnectionNodePosition(data.document, index, bus.connectionNodeId, node.id);
         if (!position) return null;
-        const id = `bus:${bus.connectionNodeId || bus.busId}`;
+        const id = labelId("bus", node.id);
         const lines = [];
         if (options.showBusVoltagePu) lines.push(`${formatResultNumber(bus.voltagePu, 4)} p.u.`);
         if (options.showBusVoltageKv) lines.push(`${formatResultNumber(bus.voltageKv, 2)} kV`);
@@ -177,7 +187,7 @@ export default function AnalysisOverlayLayer() {
             id={`analysis-${id}`}
             x={position.x + 4}
             y={position.y - 6}
-            title={busTitle(data.document, index, bus)}
+            title={busTitle(node, bus)}
             showTitle={options.showComponentNames}
             lines={lines}
             offset={offsetFor(id)}
@@ -187,9 +197,11 @@ export default function AnalysisOverlayLayer() {
       })}
 
       {result.branches.map((branch) => {
-        const position = getBranchPosition(data.document, branch.componentId);
+        if (!analysisEntityBelongsToDiagram(branch.componentId, data.document.id)) return null;
+        const localComponentId = localAnalysisEntityId(branch.componentId, data.document.id);
+        const position = getBranchPosition(data.document, localComponentId);
         if (!position) return null;
-        const id = `branch:${branch.componentId}`;
+        const id = labelId("branch", localComponentId);
         const lines = [];
         if (options.showBranchActivePower) lines.push(`P ${formatPowerKw(branch.activePowerFromKw)}`);
         if (options.showBranchReactivePower) lines.push(`Q ${formatReactivePowerKvar(branch.reactivePowerFromKvar)}`);
@@ -214,9 +226,11 @@ export default function AnalysisOverlayLayer() {
       })}
 
       {result.generators.map((generator) => {
-        const position = getEquipmentPosition(data.document, generator.componentId);
+        if (!analysisEntityBelongsToDiagram(generator.componentId, data.document.id)) return null;
+        const localComponentId = localAnalysisEntityId(generator.componentId, data.document.id);
+        const position = getEquipmentPosition(data.document, localComponentId);
         if (!position) return null;
-        const id = `generator:${generator.componentId}`;
+        const id = labelId("generator", localComponentId);
         const lines = [];
         if (options.showGeneratorActivePower) lines.push(`P ${formatPowerKw(generator.activePowerKw)}`);
         if (options.showGeneratorReactivePower) lines.push(`Q ${formatReactivePowerKvar(generator.reactivePowerKvar)}`);
@@ -226,7 +240,7 @@ export default function AnalysisOverlayLayer() {
             id={`analysis-${id}`}
             x={position.x + 5}
             y={position.y + 4.5}
-            title={data.document.nodes?.[generator.componentId]?.properties?.name || generator.componentId}
+            title={data.document.nodes?.[localComponentId]?.properties?.name || localComponentId}
             showTitle={options.showComponentNames}
             lines={lines}
             offset={offsetFor(id)}
@@ -236,9 +250,11 @@ export default function AnalysisOverlayLayer() {
       })}
 
       {result.loads.map((load) => {
-        const position = getEquipmentPosition(data.document, load.componentId);
+        if (!analysisEntityBelongsToDiagram(load.componentId, data.document.id)) return null;
+        const localComponentId = localAnalysisEntityId(load.componentId, data.document.id);
+        const position = getEquipmentPosition(data.document, localComponentId);
         if (!position) return null;
-        const id = `load:${load.componentId}`;
+        const id = labelId("load", localComponentId);
         const lines = [];
         if (options.showLoadActivePower) lines.push(`P ${formatPowerKw(load.activePowerKw)}`);
         if (options.showLoadReactivePower) lines.push(`Q ${formatReactivePowerKvar(load.reactivePowerKvar)}`);
@@ -248,7 +264,7 @@ export default function AnalysisOverlayLayer() {
             id={`analysis-${id}`}
             x={position.x + 5}
             y={position.y + 4.5}
-            title={data.document.nodes?.[load.componentId]?.properties?.name || load.componentId}
+            title={data.document.nodes?.[localComponentId]?.properties?.name || localComponentId}
             showTitle={options.showComponentNames}
             lines={lines}
             offset={offsetFor(id)}
@@ -258,9 +274,11 @@ export default function AnalysisOverlayLayer() {
       })}
 
       {result.transformers.map((transformer) => {
-        const position = getEquipmentPosition(data.document, transformer.componentId);
+        if (!analysisEntityBelongsToDiagram(transformer.componentId, data.document.id)) return null;
+        const localComponentId = localAnalysisEntityId(transformer.componentId, data.document.id);
+        const position = getEquipmentPosition(data.document, localComponentId);
         if (!position) return null;
-        const id = `transformer:${transformer.componentId}`;
+        const id = labelId("transformer", localComponentId);
         const lines = [];
         if (options.showTransformerActivePower) lines.push(`P ${formatPowerKw(transformer.activePowerPrimaryKw)}`);
         if (options.showTransformerReactivePower) lines.push(`Q ${formatReactivePowerKvar(transformer.reactivePowerPrimaryKvar)}`);
@@ -273,7 +291,7 @@ export default function AnalysisOverlayLayer() {
             id={`analysis-${id}`}
             x={position.x + 6}
             y={position.y - 3}
-            title={data.document.nodes?.[transformer.componentId]?.properties?.name || transformer.componentId}
+            title={data.document.nodes?.[localComponentId]?.properties?.name || localComponentId}
             showTitle={options.showComponentNames}
             lines={lines}
             offset={offsetFor(id)}

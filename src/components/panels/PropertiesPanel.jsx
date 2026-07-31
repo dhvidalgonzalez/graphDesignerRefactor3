@@ -1,5 +1,4 @@
 import FieldInput from "../common/FieldInput.jsx";
-import TerminalConnectionsEditor from "./TerminalConnectionsEditor.jsx";
 import { getSymbolDefinition } from "../../domain/catalog/symbolCatalog.js";
 import { getVoltageLevel, getVoltageLevels } from "../../domain/electrical/voltageLevels.js";
 import { shallowEqual, useEditorActions, useEditorSelector } from "../../editor/EditorContext.jsx";
@@ -59,18 +58,10 @@ export default function PropertiesPanel() {
         </section>
 
         {definition.electrical !== false && (
-          <TerminalConnectionsEditor
-            document={data.document}
-            entityKind="node"
-            entityId={node.id}
-          />
-        )}
-
-        {definition.electrical !== false && (
           <section className="property-section property-section--electric">
             <div className="section-heading-row"><div><span className="eyebrow">Modelo de red</span><h3>Ficha eléctrica</h3></div><span>⚡</span></div>
             <p>Potencias, impedancias, fabricante, regulación y demás datos técnicos se editan en una ficha separada.</p>
-            <button className="button button--primary button--full" onClick={() => actions.openElectricalEditor("node", node.id)}>Abrir propiedades eléctricas</button>
+            <button className="button button--primary button--full" onClick={() => actions.openElectricalEditor("node", node.id)}>Abrir parámetros y conexiones</button>
           </section>
         )}
 
@@ -134,19 +125,11 @@ export default function PropertiesPanel() {
           </div>
         </section>
 
-        {isLine && (
-          <TerminalConnectionsEditor
-            document={data.document}
-            entityKind="edge"
-            entityId={selectedEdge.id}
-          />
-        )}
-
         {isLine ? (
           <section className="property-section property-section--electric">
             <div className="section-heading-row"><div><span className="eyebrow">Activo físico</span><h3>{selectedEdge.properties.name || "Línea eléctrica"}</h3></div><span>⚡</span></div>
             <div className="read-only-grid"><span>Longitud</span><strong>{selectedEdge.properties.lengthKm ?? 0} km</strong><span>Circuitos</span><strong>{selectedEdge.properties.circuitCount ?? 1}</strong></div>
-            <button className="button button--primary button--full" onClick={() => actions.openElectricalEditor("edge", selectedEdge.id)}>Abrir propiedades eléctricas</button>
+            <button className="button button--primary button--full" onClick={() => actions.openElectricalEditor("edge", selectedEdge.id)}>Abrir parámetros y conexiones</button>
           </section>
         ) : (
           <section className="property-section property-section--muted">

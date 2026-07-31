@@ -53,6 +53,10 @@ export function createNode(type, position, overrides = {}) {
     ...definition.defaultProperties,
     ...explicitProperties,
   };
+  const logicalConnections = overrides.logicalConnections
+    && typeof overrides.logicalConnections === "object"
+    ? structuredClone(overrides.logicalConnections)
+    : {};
   return {
     id: overrides.id ?? createId("node"),
     type,
@@ -67,6 +71,7 @@ export function createNode(type, position, overrides = {}) {
       explicitProperties,
       overrides.parameterMetadata,
     ),
+    logicalConnections,
   };
 }
 
@@ -125,6 +130,10 @@ export function createEdge(source, target, overrides = {}) {
         "reactanceOhmPerKm", "susceptanceUsPerKm",
       ].map((key) => ({ key }))
     : ["voltageLevelId", "outOfService"].map((key) => ({ key }));
+  const logicalConnections = overrides.logicalConnections
+    && typeof overrides.logicalConnections === "object"
+    ? structuredClone(overrides.logicalConnections)
+    : {};
   return {
     id: overrides.id ?? createId(kind === "line" ? "line" : "path"),
     kind,
@@ -139,5 +148,6 @@ export function createEdge(source, target, overrides = {}) {
       explicitProperties,
       overrides.parameterMetadata,
     ),
+    logicalConnections,
   };
 }

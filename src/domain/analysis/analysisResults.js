@@ -5,6 +5,38 @@ import { analysisTypeLabel } from "./analysisRegistry.js";
 const numberFormatter = new Intl.NumberFormat("es-CL", { maximumFractionDigits: 3 });
 const compactNumberFormatter = new Intl.NumberFormat("es-CL", { maximumFractionDigits: 2, notation: "compact" });
 
+const GLOBAL_RESULT_SEPARATOR = "::";
+
+export function localAnalysisEntityId(value, diagramId) {
+  const normalized = String(value || "");
+  const prefix = `${String(diagramId || "")}${GLOBAL_RESULT_SEPARATOR}`;
+  if (!prefix || prefix === GLOBAL_RESULT_SEPARATOR) return normalized;
+  const index = normalized.indexOf(prefix);
+  return index >= 0
+    ? `${normalized.slice(0, index)}${normalized.slice(index + prefix.length)}`
+    : normalized;
+}
+
+export function analysisEntityBelongsToDiagram(value, diagramId) {
+  const normalized = String(value || "");
+  if (!normalized.includes(GLOBAL_RESULT_SEPARATOR)) return true;
+  return normalized.includes(`${String(diagramId || "")}${GLOBAL_RESULT_SEPARATOR}`);
+}
+
+function setAlias(map, key, value, diagramId) {
+  if (key == null || key === "") return;
+  const normalized = String(key);
+  map.set(normalized, value);
+  const local = localAnalysisEntityId(normalized, diagramId);
+  if (local && local !== normalized) map.set(local, value);
+}
+
+function componentResultMap(rows, diagramId) {
+  const map = new Map();
+  rows.forEach((item) => setAlias(map, item.componentId, item, diagramId));
+  return map;
+}
+
 export const DEFAULT_ANALYSIS_OVERLAY_OPTIONS = Object.freeze({
   visible: true,
   colorBusesByVoltage: true,
@@ -190,37 +222,126 @@ export function getAnalysisNetworkResult(result, viewId) {
 
 export function createAnalysisResultIndex(document, rawResult, viewId) {
   const result = getAnalysisNetworkResult(rawResult, viewId);
+  const diagramId = document?.id;
   const model = document.electricalModel ?? { components: [], terminals: [], connectionNodes: [] };
   const connectionNodes = Array.isArray(model.connectionNodes) ? model.connectionNodes : [];
   const terminals = Array.isArray(model.terminals) ? model.terminals : [];
-  const connectionNodeById = new Map(connectionNodes.map((item) => [item.id, item]));
-  const connectionNodeByBusComponentId = new Map(
-    connectionNodes.filter((item) => item.busComponentId).map((item) => [item.busComponentId, item]),
-  );
+  const connectionNodeById = new Map();
+  const connectionNodeByBusComponentId = new Map();
+
+  connectionNodes.forEach((item) => {
+    setAlias(connectionNodeById, item.id, item, diagramId);
+    if (diagramId) setAlias(connectionNodeById, `${diagramId}::${item.id}`, item, diagramId);
+    if (item.busComponentId) {
+      setAlias(connectionNodeByBusComponentId, item.busComponentId, item, diagramId);
+      if (diagramId) {
+        setAlias(
+          connectionNodeByBusComponentId,
+          `${diagramId}::${item.busComponentId}`,
+          item,
+          diagramId,
+        );
+        setAlias(
+          connectionNodeById,
+          `cn-${diagramId}::${item.busComponentId}`,
+          item,
+          diagramId,
+        );
+      }
+    }
+  });
+
   const terminalConnectionByComponentId = new Map();
   terminals.forEach((terminal) => {
-    if (!terminalConnectionByComponentId.has(terminal.componentId)) terminalConnectionByComponentId.set(terminal.componentId, []);
-    terminalConnectionByComponentId.get(terminal.componentId).push(terminal.connectionNodeId);
+    const componentIds = new Set([
+      String(terminal.componentId || ""),
+      localAnalysisEntityId(terminal.componentId, diagramId),
+      ...(diagramId ? [`${diagramId}::${terminal.componentId}`] : []),
+    ].filter(Boolean));
+    componentIds.forEach((componentId) => {
+      if (!terminalConnectionByComponentId.has(componentId)) {
+        terminalConnectionByComponentId.set(componentId, []);
+      }
+      const current = terminalConnectionByComponentId.get(componentId);
+      const candidates = [
+        terminal.connectionNodeId,
+        localAnalysisEntityId(terminal.connectionNodeId, diagramId),
+        ...(diagramId && terminal.connectionNodeId
+          ? [`${diagramId}::${terminal.connectionNodeId}`]
+          : []),
+      ].filter(Boolean);
+      candidates.forEach((connectionNodeId) => {
+        if (!current.includes(connectionNodeId)) current.push(connectionNodeId);
+      });
+    });
   });
+
   const busByConnectionNodeId = new Map();
   const busByBusId = new Map();
   result.buses.forEach((item) => {
-    if (item.connectionNodeId) busByConnectionNodeId.set(item.connectionNodeId, item);
-    if (item.busId) busByBusId.set(item.busId, item);
+    const connectionIdentifiers = [
+      item.connectionNodeId,
+      item.id,
+    ];
+    connectionIdentifiers.forEach((identifier) => {
+      setAlias(busByConnectionNodeId, identifier, item, diagramId);
+    });
+
+    const busIdentifiers = [
+      item.busId,
+      item.busComponentId,
+      ...(Array.isArray(item.busComponentIds) ? item.busComponentIds : []),
+    ];
+    busIdentifiers.forEach((identifier) => {
+      setAlias(busByBusId, identifier, item, diagramId);
+    });
   });
+
+  const visualModel = rawResult?.visualElectricalModel;
+  const visualConnectionNodes = Array.isArray(visualModel?.connectionNodes)
+    ? visualModel.connectionNodes
+    : [];
+  visualConnectionNodes.forEach((visualNode) => {
+    const identifiers = [
+      visualNode.id,
+      visualNode.busComponentId,
+      ...(Array.isArray(visualNode.busComponentIds) ? visualNode.busComponentIds : []),
+    ].filter(Boolean);
+    const busResult = identifiers.reduce((found, identifier) => (
+      found
+      ?? busByConnectionNodeId.get(identifier)
+      ?? busByBusId.get(identifier)
+    ), null);
+    if (!busResult) return;
+
+    setAlias(busByConnectionNodeId, visualNode.id, busResult, diagramId);
+    identifiers.forEach((identifier) => setAlias(busByBusId, identifier, busResult, diagramId));
+
+    const activeBusComponentId = identifiers
+      .map((identifier) => localAnalysisEntityId(identifier, diagramId))
+      .find((identifier) => Boolean(document.nodes?.[identifier]));
+    if (!activeBusComponentId) return;
+    const localConnectionNode = connectionNodeByBusComponentId.get(activeBusComponentId);
+    if (!localConnectionNode) return;
+    setAlias(connectionNodeById, visualNode.id, localConnectionNode, diagramId);
+    setAlias(busByConnectionNodeId, localConnectionNode.id, busResult, diagramId);
+    setAlias(busByBusId, activeBusComponentId, busResult, diagramId);
+  });
+
   return {
     result,
+    diagramId,
     connectionNodeById,
     connectionNodeByBusComponentId,
     terminalConnectionByComponentId,
     busByConnectionNodeId,
     busByBusId,
-    branchByComponentId: new Map(result.branches.map((item) => [item.componentId, item])),
-    transformerByComponentId: new Map(result.transformers.map((item) => [item.componentId, item])),
-    generatorByComponentId: new Map(result.generators.map((item) => [item.componentId, item])),
-    loadByComponentId: new Map(result.loads.map((item) => [item.componentId, item])),
-    shuntByComponentId: new Map(result.shunts.map((item) => [item.componentId, item])),
-    switchByComponentId: new Map(result.switches.map((item) => [item.componentId, item])),
+    branchByComponentId: componentResultMap(result.branches, diagramId),
+    transformerByComponentId: componentResultMap(result.transformers, diagramId),
+    generatorByComponentId: componentResultMap(result.generators, diagramId),
+    loadByComponentId: componentResultMap(result.loads, diagramId),
+    shuntByComponentId: componentResultMap(result.shunts, diagramId),
+    switchByComponentId: componentResultMap(result.switches, diagramId),
   };
 }
 
@@ -277,19 +398,34 @@ function averagePoints(points) {
 }
 
 export function getConnectionNodePosition(document, index, connectionNodeId, busId) {
+  const localConnectionNodeId = localAnalysisEntityId(connectionNodeId, document?.id);
+  const localBusId = localAnalysisEntityId(busId, document?.id);
   const connectionNode = index.connectionNodeById.get(connectionNodeId)
+    ?? index.connectionNodeById.get(localConnectionNodeId)
     ?? index.connectionNodeById.get(busId)
-    ?? index.connectionNodeByBusComponentId.get(busId);
-  if (connectionNode?.busComponentId && document.nodes?.[connectionNode.busComponentId]) {
-    return { ...document.nodes[connectionNode.busComponentId].position, visualNodeId: connectionNode.busComponentId };
+    ?? index.connectionNodeById.get(localBusId)
+    ?? index.connectionNodeByBusComponentId.get(busId)
+    ?? index.connectionNodeByBusComponentId.get(localBusId);
+  const localBusComponentId = localAnalysisEntityId(
+    connectionNode?.busComponentId,
+    document?.id,
+  );
+  if (localBusComponentId && document.nodes?.[localBusComponentId]) {
+    return {
+      ...document.nodes[localBusComponentId].position,
+      visualNodeId: localBusComponentId,
+    };
   }
-  if (document.nodes?.[busId]) return { ...document.nodes[busId].position, visualNodeId: busId };
+  if (document.nodes?.[localBusId]) {
+    return { ...document.nodes[localBusId].position, visualNodeId: localBusId };
+  }
   const memberEndpointIds = connectionNode?.memberEndpointIds ?? [];
   const points = memberEndpointIds.flatMap((endpointId) => {
-    const separator = endpointId.indexOf("::");
+    const localEndpointId = localAnalysisEntityId(endpointId, document?.id);
+    const separator = localEndpointId.indexOf("::");
     if (separator < 0) return [];
-    const nodeId = endpointId.slice(0, separator);
-    const portId = endpointId.slice(separator + 2);
+    const nodeId = localEndpointId.slice(0, separator);
+    const portId = localEndpointId.slice(separator + 2);
     const node = document.nodes?.[nodeId];
     if (!node) return [];
     try { return [getPortWorldPosition(node, portId)]; } catch { return []; }
@@ -298,12 +434,14 @@ export function getConnectionNodePosition(document, index, connectionNodeId, bus
 }
 
 export function getBranchPosition(document, componentId) {
-  const edge = document.edges?.[componentId];
+  const localId = localAnalysisEntityId(componentId, document?.id);
+  const edge = document.edges?.[localId];
   return edge ? getEdgeMiddlePoint(document, edge) : null;
 }
 
 export function getEquipmentPosition(document, componentId) {
-  return document.nodes?.[componentId]?.position ?? null;
+  const localId = localAnalysisEntityId(componentId, document?.id);
+  return document.nodes?.[localId]?.position ?? null;
 }
 
 export function voltagePuColor(value, status = "NORMAL") {

@@ -30,7 +30,7 @@ export function createDiagramSheet({ name = "Diagrama 1", sample = false, docume
   };
 }
 
-export function createProject({ name, description = "", sample = false } = {}) {
+export function createProject({ name, description = "", sample = false, multiDiagram = false } = {}) {
   const timestamp = now();
   const firstSheet = createDiagramSheet({
     name: sample ? "Diagrama de demostración" : "Diagrama 1",
@@ -42,6 +42,7 @@ export function createProject({ name, description = "", sample = false } = {}) {
     id: createId("project"),
     name: String(name || "Proyecto sin nombre").trim() || "Proyecto sin nombre",
     description: String(description || "").trim(),
+    multiDiagram: Boolean(multiDiagram),
     createdAt: timestamp,
     updatedAt: timestamp,
     activeDiagramId: firstSheet.id,
@@ -89,6 +90,7 @@ export function normalizeProject(candidate) {
     id: String(candidate.id ?? createId("project")),
     name: String(candidate.name || "Proyecto sin nombre"),
     description: String(candidate.description || ""),
+    multiDiagram: Boolean(candidate.multiDiagram),
     createdAt: candidate.createdAt ?? now(),
     updatedAt: candidate.updatedAt ?? now(),
     activeDiagramId,
@@ -106,6 +108,7 @@ export function getProjectSummary(project) {
     name: project.name,
     description: project.description,
     diagramCount: project.diagrams.length,
+    multiDiagram: Boolean(project.multiDiagram),
     memberCount: project.members.length,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,

@@ -212,44 +212,42 @@ export default function ElectricalPropertiesModal() {
       </div>
 
       <div className="electrical-modal-tabs" role="tablist">
-        <button type="button" className={tab === "parameters" ? "active" : ""} onClick={() => setTab("parameters")}>Parámetros</button>
-        <button type="button" className={tab === "connections" ? "active" : ""} onClick={() => setTab("connections")}>Conexiones</button>
+        <button type="button" className={tab === "parameters" ? "active" : ""} onClick={() => setTab("parameters")}>Parámetros y conexiones</button>
         <button type="button" className={tab === "results" ? "active" : ""} onClick={() => setTab("results")}>
           Resultado activo {activeResult ? "●" : ""}
         </button>
       </div>
 
       {tab === "parameters" && (
-        <div className="electrical-form-grid">
-          {Object.entries(grouped).map(([section, fields]) => (
-            <section className="electrical-section" key={section}>
-              <h3>{section}</h3>
-              {fields.map((field) => (
-                <div className="parameter-field-card" key={field.key}>
-                  <label className="property-field">
-                    <span>{field.label}</span>
-                    <FieldInput
-                      field={field}
-                      value={entity.properties[field.key]}
-                      voltageLevels={voltageLevels}
-                      onManageVoltage={actions.openVoltageLevels}
-                      onCreateVoltage={(value) => createAndAssignVoltage(field, value)}
-                      onCommit={(value) => commit(field, value)}
-                    />
-                  </label>
-                </div>
-              ))}
-            </section>
-          ))}
-        </div>
-      )}
+        <div className="electrical-parameters-layout">
+          <div className="electrical-form-grid">
+            {Object.entries(grouped).map(([section, fields]) => (
+              <section className="electrical-section" key={section}>
+                <h3>{section}</h3>
+                {fields.map((field) => (
+                  <div className="parameter-field-card" key={field.key}>
+                    <label className="property-field">
+                      <span>{field.label}</span>
+                      <FieldInput
+                        field={field}
+                        value={entity.properties[field.key]}
+                        voltageLevels={voltageLevels}
+                        onManageVoltage={actions.openVoltageLevels}
+                        onCreateVoltage={(value) => createAndAssignVoltage(field, value)}
+                        onCommit={(value) => commit(field, value)}
+                      />
+                    </label>
+                  </div>
+                ))}
+              </section>
+            ))}
+          </div>
 
-      {tab === "connections" && (
-        <div className="electrical-connections-tab">
           <TerminalConnectionsEditor
             document={data.document}
             entityKind={data.editor.kind}
             entityId={entity.id}
+            compact
           />
         </div>
       )}

@@ -87,10 +87,46 @@ function isMissing(component, key) {
   return !parameter || parameter.value === null || parameter.value === "" || parameter.status === "MISSING";
 }
 
+function isPreparedElectricalModel(model) {
+  return Boolean(
+    model
+    && Array.isArray(model.components)
+    && Array.isArray(model.terminals)
+    && Array.isArray(model.connectionNodes),
+  );
+}
+
+function analysisElectricalModel(document) {
+  if (
+    document?.analysisScope === "PROJECT"
+    && isPreparedElectricalModel(document.electricalModel)
+  ) {
+    return structuredClone(document.electricalModel);
+  }
+  return buildElectricalModel(document);
+}
+
+function addIssueContext(items, componentById) {
+  return items.map((item) => {
+    if (!item.componentId) return item;
+    const component = componentById.get(item.componentId);
+    const source = component?.sourceEntity;
+    if (!component || !source?.diagramId) return item;
+    return {
+      ...item,
+      diagramId: source.diagramId,
+      diagramName: source.diagramName || source.diagramId,
+      componentName: component.name || source.localId || component.id,
+    };
+  });
+}
+
 
 export function evaluateAnalysisReadiness(document) {
-  const model = buildElectricalModel(document);
-  const errors = [];
+  const model = analysisElectricalModel(document);
+  const errors = Array.isArray(document?.projectTopologyIssues)
+    ? document.projectTopologyIssues.map((item) => ({ ...item }))
+    : [];
   const warnings = [];
   const componentById = new Map(model.components.map((component) => [component.id, component]));
   const connectionNodeById = new Map(model.connectionNodes.map((node) => [node.id, node]));
@@ -329,8 +365,8 @@ export function evaluateAnalysisReadiness(document) {
 
   return {
     readiness,
-    errors,
-    warnings: uniqueWarnings,
+    errors: addIssueContext(errors, componentById),
+    warnings: addIssueContext(uniqueWarnings, componentById),
     statistics: getElectricalModelStatistics({ ...document, electricalModel: model }),
     model,
   };
