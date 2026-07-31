@@ -1,6 +1,7 @@
 import { getSymbolDefinition } from "../../domain/catalog/symbolCatalog.js";
 import { getVoltageLevel } from "../../domain/electrical/voltageLevels.js";
 import { shallowEqual, useEditorSelector } from "../../editor/EditorContext.jsx";
+import TerminalConnectionsEditor from "./TerminalConnectionsEditor.jsx";
 
 function displayValue(value, document) {
   if (value == null || value === "") return "—";
@@ -83,6 +84,15 @@ export default function ReadOnlyPropertiesPanel() {
         </section>
 
         {definition.electrical !== false && (
+          <TerminalConnectionsEditor
+            document={document}
+            entityKind="node"
+            entityId={node.id}
+            readOnly
+          />
+        )}
+
+        {definition.electrical !== false && (
           <section className="property-section property-section--electric">
             <div className="section-heading-row">
               <div>
@@ -154,6 +164,15 @@ export default function ReadOnlyPropertiesPanel() {
             <code>puerto {selectedEdge.target.portId}</code>
           </div>
         </section>
+
+        {selectedEdge.kind === "line" && (
+          <TerminalConnectionsEditor
+            document={document}
+            entityKind="edge"
+            entityId={selectedEdge.id}
+            readOnly
+          />
+        )}
 
         <section className="property-section">
           <PropertyRows

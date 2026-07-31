@@ -128,6 +128,7 @@ export default function ProjectOverview() {
           <div className="project-settings-summary-grid">
             <article><span>Nombre del proyecto</span><strong>{activeProject.name}</strong></article>
             <article><span>Propietario</span><strong>{activeProject.owner.displayName}</strong></article>
+            <article><span>Topología</span><strong>{activeProject.multiDiagram ? "Proyecto multidiagrama" : "Diagramas independientes"}</strong></article>
             <article className="project-settings-summary-grid--wide"><span>Descripción</span><p>{activeProject.description || "Sin descripción"}</p></article>
             <article><span>Creado</span><strong>{formatDate(activeProject.createdAt)}</strong></article>
             <article><span>Identificador cloud</span><code>{activeProject.id}</code></article>

@@ -193,7 +193,10 @@ export default function HeaderBar() {
                   ? "editor"
                   : "lector"}
             </small>
-            <strong>{activeProject?.name ?? "Proyecto"}</strong>
+            <strong>
+              {activeProject?.name ?? "Proyecto"}
+              {activeProject?.multiDiagram && <span className="multi-diagram-inline-badge">Multidiagrama</span>}
+            </strong>
           </button>
         </div>
 

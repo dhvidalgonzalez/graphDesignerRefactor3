@@ -11,6 +11,7 @@ import {
   normalizeAnalysisOptions,
 } from "../../domain/analysis/analysisRegistry.js";
 import { getOperatingCase, normalizeOperatingCases } from "../../domain/analysis/operatingCases.js";
+import { buildProjectAnalysisDocument, localIdFromGlobal } from "../../domain/electrical/projectTopology.js";
 import {
   formatCurrentA,
   formatPowerKw,
@@ -29,6 +30,7 @@ import {
   createAnalysisClientRequestId,
   getAnalysisStudyService,
   listAnalysisStudiesByDiagramService,
+  listAnalysisStudiesByProjectService,
   loadAnalysisArtifactTextService,
   startAnalysisService,
 } from "../../services/analysis/index.js";
@@ -599,6 +601,7 @@ function AnalysisSpecificOptions({ analysisType, value, onChange, document, vali
 
 function ExecutionTab({
   document,
+  sourceDocument,
   configuration,
   activeProject,
   activeDiagram,
@@ -640,10 +643,12 @@ function ExecutionTab({
   };
 
   const refreshHistory = useCallback(async () => {
-    if (!activeDiagram?.id) return [];
+    if (!activeDiagram?.id || !activeProject?.id) return [];
     setHistoryLoading(true);
     try {
-      const studies = await listAnalysisStudiesByDiagramService(activeDiagram.id);
+      const studies = activeProject.multiDiagram
+        ? await listAnalysisStudiesByProjectService(activeProject.id)
+        : await listAnalysisStudiesByDiagramService(activeDiagram.id);
       setHistory(studies);
       return studies;
     } catch (nextError) {
@@ -652,7 +657,7 @@ function ExecutionTab({
     } finally {
       setHistoryLoading(false);
     }
-  }, [activeDiagram?.id]);
+  }, [activeDiagram?.id, activeProject?.id, activeProject?.multiDiagram]);
 
   useEffect(() => {
     setCurrentStudy(null);
@@ -680,7 +685,9 @@ function ExecutionTab({
       setArtifactText(loaded.text);
       if (type === "RESULT") {
         const parsed = parseAnalysisResultText(loaded.text);
-        if (parsed.diagramId !== activeDiagram?.id) throw new Error("El resultado pertenece a otro diagrama.");
+        const belongsToActiveScope = parsed.diagramId === activeDiagram?.id
+          || (Boolean(study.multiDiagram) && study.projectId === activeProject?.id);
+        if (!belongsToActiveScope) throw new Error("El resultado pertenece a otro proyecto o diagrama.");
         if (activate) {
           editorActions.activateAnalysisResult(study, parsed);
           setMessage("Resultado activo sobre el diagrama.");
@@ -695,7 +702,7 @@ function ExecutionTab({
     } finally {
       setBusy(false);
     }
-  }, [activeDiagram?.id, editorActions]);
+  }, [activeDiagram?.id, activeProject?.id, editorActions]);
 
   useEffect(() => {
     const studyId = currentStudy?.id;
@@ -729,10 +736,30 @@ function ExecutionTab({
     if (!activeProject?.id || !activeDiagram?.id) return;
     setBusy(true);
     setError("");
-    setMessage("Guardando la versión actual del diagrama…");
+    setMessage(activeProject.multiDiagram
+      ? "Guardando las hojas pendientes del proyecto…"
+      : "Guardando la versión actual del diagrama…");
     try {
       editorActions.setPersistence("saving", "Guardando antes del análisis");
-      const saved = await workspaceActions.saveDiagramDocument(activeProject.id, activeDiagram.id, document);
+      const expectedDiagramVersions = Object.fromEntries(
+        activeProject.diagrams.map((sheet) => [sheet.id, Number(sheet.storageVersion ?? 0)]),
+      );
+      const sheetsToSave = activeProject.multiDiagram
+        ? activeProject.diagrams.filter((sheet) => (
+            sheet.id === activeDiagram.id || (sheet.recoveredDraft && sheet.document)
+          ))
+        : activeProject.diagrams.filter((sheet) => sheet.id === activeDiagram.id);
+      let activeSaved = null;
+      for (const sheet of sheetsToSave) {
+        const saved = await workspaceActions.saveDiagramDocument(
+          activeProject.id,
+          sheet.id,
+          sheet.id === activeDiagram.id ? sourceDocument : sheet.document,
+        );
+        expectedDiagramVersions[sheet.id] = Number(saved.storageVersion);
+        if (sheet.id === activeDiagram.id) activeSaved = saved;
+      }
+      if (!activeSaved) throw new Error("No fue posible guardar la hoja activa antes del análisis.");
       editorActions.setPersistence("saved", "Guardado en la nube");
       setMessage("Creando el estudio y enviándolo al solver…");
       const normalizedOptions = normalizeAnalysisOptions(analysisType, analysisOptions);
@@ -742,7 +769,10 @@ function ExecutionTab({
         analysisType,
         analysisOptionsJson: JSON.stringify(normalizedOptions),
         executionPreference,
-        expectedDiagramVersion: Number(saved.storageVersion),
+        expectedDiagramVersion: Number(activeSaved.storageVersion),
+        expectedDiagramVersionsJson: activeProject.multiDiagram
+          ? JSON.stringify(expectedDiagramVersions)
+          : undefined,
         clientRequestId: createAnalysisClientRequestId(),
         name: studyName.trim() || undefined,
       });
@@ -795,6 +825,7 @@ function ExecutionTab({
         <div className="read-only-grid analysis-run-summary">
           <span>Análisis</span><strong>{analysisType}</strong>
           <span>Versión actual</span><strong>{activeDiagram?.storageVersion ?? 0}</strong>
+          <span>Alcance</span><strong>{activeProject?.multiDiagram ? `${activeProject.diagrams.length} diagramas` : "Hoja activa"}</strong>
           <span>Unidades reservadas</span><strong>{analysisUnits(analysisType)}</strong>
           <span>Proveedor</span><strong>Lambda Docker</strong>
         </div>
@@ -1022,9 +1053,29 @@ function ResultsTab({ overlay, actions, activeDiagram, document }) {
   const options = overlay.options ?? {};
   const summary = network.summary ?? result.summary ?? {};
   const currentVersion = Number(activeDiagram?.storageVersion ?? 0);
-  const resultVersion = Number(result.diagramStorageVersion ?? overlay.study?.inputDiagramVersion ?? 0);
+  let projectVersions = result.diagramVersions && typeof result.diagramVersions === "object"
+    ? result.diagramVersions
+    : {};
+  if (!Object.keys(projectVersions).length && overlay.study?.inputProjectVersionsJson) {
+    try {
+      projectVersions = JSON.parse(overlay.study.inputProjectVersionsJson);
+    } catch {
+      projectVersions = {};
+    }
+  }
+  const resultVersion = Number(
+    projectVersions[activeDiagram?.id]
+      ?? result.diagramStorageVersion
+      ?? overlay.study?.inputDiagramVersion
+      ?? 0,
+  );
   const versionMismatch = Boolean(currentVersion && resultVersion && currentVersion !== resultVersion);
-  const componentLabel = (id) => document.nodes?.[id]?.properties?.name || document.edges?.[id]?.properties?.name || id;
+  const componentLabel = (id) => {
+    const localId = localIdFromGlobal(id, document.id);
+    return document.nodes?.[localId]?.properties?.name
+      || document.edges?.[localId]?.properties?.name
+      || id;
+  };
   const rows = network[category] ?? [];
   const columnsByCategory = {
     buses: [
@@ -1130,7 +1181,20 @@ export default function AnalysisPanel() {
   const editorActions = useEditorActions();
   const { activeProject, activeDiagram, actions: workspaceActions } = useWorkspace();
   const [tab, setTab] = useState("execute");
-  const validation = useMemo(() => evaluateAnalysisReadiness(document), [document]);
+  const projectSnapshot = useMemo(() => {
+    if (!activeProject) return null;
+    return {
+      ...activeProject,
+      diagrams: activeProject.diagrams.map((sheet) => (
+        sheet.id === document.id ? { ...sheet, document } : sheet
+      )),
+    };
+  }, [activeProject, document]);
+  const analysisDocument = useMemo(
+    () => buildProjectAnalysisDocument(projectSnapshot, activeDiagram?.id) ?? document,
+    [activeDiagram?.id, document, projectSnapshot],
+  );
+  const validation = useMemo(() => evaluateAnalysisReadiness(analysisDocument), [analysisDocument]);
   const configuration = normalizeAnalysisConfiguration(document.analysisConfiguration);
 
   return (
@@ -1139,13 +1203,13 @@ export default function AnalysisPanel() {
       <div className="analysis-tabs" role="tablist">
         {[["execute", "Ejecutar"], ["results", "Resultados"], ["labels", "Etiquetas"], ["overview", "Preparación"], ["cases", "Casos"], ["configuration", "Solver"], ["model", "Modelo"]].map(([id, label]) => <button key={id} type="button" className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>)}
       </div>
-      {tab === "execute" && <ExecutionTab document={document} configuration={configuration} activeProject={activeProject} activeDiagram={activeDiagram} editorActions={editorActions} workspaceActions={workspaceActions} />}
+      {tab === "execute" && <ExecutionTab document={analysisDocument} sourceDocument={document} configuration={configuration} activeProject={activeProject} activeDiagram={activeDiagram} editorActions={editorActions} workspaceActions={workspaceActions} />}
       {tab === "results" && <ResultsTab overlay={editorData.analysisOverlay} actions={editorActions} activeDiagram={activeDiagram} document={document} />}
       {tab === "labels" && <LabelsTab overlay={editorData.analysisOverlay} actions={editorActions} />}
-      {tab === "overview" && <OverviewTab document={document} validation={validation} activeDiagram={activeDiagram} />}
+      {tab === "overview" && <OverviewTab document={analysisDocument} validation={validation} activeDiagram={activeDiagram} />}
       {tab === "cases" && <CasesTab document={document} validation={validation} actions={editorActions} canEdit={Boolean(activeProject?.canEdit)} />}
       {tab === "configuration" && <ConfigurationTab configuration={configuration} actions={editorActions} canEdit={Boolean(activeProject?.canEdit)} />}
-      {tab === "model" && <ModelTab document={document} validation={validation} activeDiagram={activeDiagram} />}
+      {tab === "model" && <ModelTab document={analysisDocument} validation={validation} activeDiagram={activeDiagram} />}
     </aside>
   );
 }

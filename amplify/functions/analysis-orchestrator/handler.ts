@@ -64,6 +64,7 @@ type StartAnalysisArguments = {
   analysisOptionsJson?: string | null;
   executionPreference?: string | null;
   expectedDiagramVersion: number;
+  expectedDiagramVersionsJson?: string | null;
   clientRequestId: string;
   name?: string | null;
 };
@@ -112,6 +113,7 @@ type ElectricalComponent = {
   terminalIds?: string[];
   parameters?: Record<string, ParameterValue>;
   operatingState?: Record<string, unknown>;
+  sourceEntity?: Record<string, unknown>;
 };
 
 type ElectricalTerminal = {
@@ -119,12 +121,20 @@ type ElectricalTerminal = {
   componentId: string;
   role?: string;
   connectionNodeId?: string | null;
+  sourceEndpoint?: Record<string, unknown>;
 };
 
 type ConnectionNode = {
   id: string;
   nominalVoltageKv?: number | null;
+  voltageLevelId?: string | null;
+  voltageLevelIds?: string[];
+  voltageConflict?: boolean;
   busComponentId?: string | null;
+  busComponentIds?: string[];
+  memberEndpointIds?: string[];
+  sourceDiagramId?: string;
+  sourceDiagramIds?: string[];
 };
 
 type OperatingCase = {
@@ -135,10 +145,28 @@ type OperatingCase = {
   overrides?: Record<string, Record<string, unknown>>;
 };
 
+type LogicalConnectionReference = {
+  diagramId?: string;
+  entityKind?: string;
+  entityId?: string;
+  componentId?: string;
+  terminalKey?: string;
+  portId?: string;
+};
+
+type DiagramEntity = {
+  id: string;
+  kind?: string;
+  properties?: Record<string, unknown>;
+  logicalConnections?: Record<string, LogicalConnectionReference>;
+};
+
 type DiagramDocument = {
   schemaVersion?: number;
   id?: string;
   name?: string;
+  nodes?: Record<string, DiagramEntity>;
+  edges?: Record<string, DiagramEntity>;
   electricalModel?: {
     schemaVersion?: number;
     components?: ElectricalComponent[];
@@ -153,6 +181,416 @@ type DiagramDocument = {
     validationOptions?: Record<string, unknown>;
   };
 };
+
+
+const GLOBAL_SEPARATOR = "::";
+
+class ProjectUnionFind {
+  private parent = new Map<string, string>();
+
+  constructor(keys: string[]) {
+    keys.forEach((key) => this.parent.set(key, key));
+  }
+
+  add(key: string) {
+    if (key && !this.parent.has(key)) this.parent.set(key, key);
+  }
+
+  find(key: string): string | null {
+    const parent = this.parent.get(key);
+    if (!parent) return null;
+    if (parent === key) return key;
+    const root = this.find(parent);
+    if (root) this.parent.set(key, root);
+    return root;
+  }
+
+  union(left: string, right: string) {
+    this.add(left);
+    this.add(right);
+    const rootLeft = this.find(left);
+    const rootRight = this.find(right);
+    if (!rootLeft || !rootRight || rootLeft === rootRight) return;
+    const [first, second] = [rootLeft, rootRight].sort();
+    this.parent.set(second, first);
+  }
+}
+
+function projectHashToken(value: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function globalProjectId(diagramId: string, localId: string) {
+  return `${diagramId}${GLOBAL_SEPARATOR}${localId}`;
+}
+
+function logicalTerminalKey(
+  diagramId: string,
+  entityKind: string,
+  entityId: string,
+  terminalKey: string,
+) {
+  return [diagramId, entityKind, entityId, terminalKey].join("|");
+}
+
+function normalizeLogicalReference(
+  candidate: LogicalConnectionReference | null | undefined,
+) {
+  if (!candidate || typeof candidate !== "object") return null;
+  const diagramId = String(candidate.diagramId || "").trim();
+  const entityId = String(candidate.entityId || candidate.componentId || "").trim();
+  const entityKind = String(candidate.entityKind || "node").toLowerCase();
+  const terminalKey = String(candidate.terminalKey || candidate.portId || "").trim();
+  if (
+    !diagramId ||
+    !entityId ||
+    !terminalKey ||
+    !new Set(["node", "edge"]).has(entityKind)
+  ) {
+    return null;
+  }
+  return { diagramId, entityKind, entityId, terminalKey };
+}
+
+function parseExpectedDiagramVersions(value?: string | null) {
+  if (!value) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error("INVALID_EXPECTED_DIAGRAM_VERSIONS_JSON");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("INVALID_EXPECTED_DIAGRAM_VERSIONS_JSON");
+  }
+  return Object.fromEntries(
+    Object.entries(parsed as Record<string, unknown>).map(([diagramId, version]) => {
+      const normalized = Number(version);
+      if (!Number.isInteger(normalized) || normalized <= 0) {
+        throw new Error(`INVALID_EXPECTED_DIAGRAM_VERSION:${diagramId}`);
+      }
+      return [diagramId, normalized];
+    }),
+  );
+}
+
+async function listProjectDiagrams(projectId: string) {
+  const diagrams: Array<Schema["Diagram"]["type"]> = [];
+  let nextToken: string | null | undefined;
+  do {
+    const page = await client.models.Diagram.listDiagramsByProject(
+      { projectId },
+      { limit: 100, nextToken },
+    );
+    if (page.errors?.length) throw new Error("DIAGRAM_LIST_FAILED");
+    diagrams.push(...page.data.filter((item) => item.status !== "ARCHIVED"));
+    nextToken = page.nextToken;
+  } while (nextToken);
+  return diagrams.sort((left, right) => (left.position ?? 0) - (right.position ?? 0));
+}
+
+async function loadDiagramDocument(
+  projectId: string,
+  diagram: Schema["Diagram"]["type"],
+) {
+  const expectedKey = `projects/${projectId}/diagrams/${diagram.id}/document.json`;
+  if (diagram.storageKey !== expectedKey) {
+    throw new Error(`DIAGRAM_STORAGE_KEY_MISMATCH:${diagram.id}`);
+  }
+  const object = await s3.send(
+    new GetObjectCommand({ Bucket: BUCKET, Key: expectedKey }),
+  );
+  return JSON.parse(await bodyToString(object.Body)) as DiagramDocument;
+}
+
+function namespaceOperatingCases(
+  operatingCases: OperatingCase[] | undefined,
+  diagramId: string,
+) {
+  return normalizeCases(operatingCases).map((operatingCase) => ({
+    ...structuredClone(operatingCase),
+    overrides: Object.fromEntries(
+      Object.entries(operatingCase.overrides ?? {}).map(([componentId, patch]) => [
+        componentId.includes(GLOBAL_SEPARATOR)
+          ? componentId
+          : globalProjectId(diagramId, componentId),
+        patch,
+      ]),
+    ),
+  }));
+}
+
+function composeProjectDocument(
+  sources: Array<{
+    diagram: Schema["Diagram"]["type"];
+    document: DiagramDocument;
+  }>,
+  activeDiagramId: string,
+  projectName: string,
+) {
+  const active = sources.find((item) => item.diagram.id === activeDiagramId) ?? sources[0];
+  if (!active) throw new Error("PROJECT_HAS_NO_DIAGRAMS");
+
+  const components: ElectricalComponent[] = [];
+  const terminals: ElectricalTerminal[] = [];
+  const connectionNodes: ConnectionNode[] = [];
+  const terminalLookup = new Map<string, string>();
+
+  sources.forEach(({ diagram, document }) => {
+    const model = document.electricalModel;
+    if (
+      !Array.isArray(model?.components) ||
+      !Array.isArray(model?.terminals) ||
+      !Array.isArray(model?.connectionNodes)
+    ) {
+      throw new Error(`ELECTRICAL_MODEL_MISSING:${diagram.id}`);
+    }
+
+    const componentIdMap = new Map(
+      model.components.map((component) => [
+        component.id,
+        globalProjectId(diagram.id, component.id),
+      ]),
+    );
+    const connectionNodeIdMap = new Map(
+      model.connectionNodes.map((node) => [
+        node.id,
+        globalProjectId(diagram.id, node.id),
+      ]),
+    );
+
+    model.components.forEach((component) => {
+      components.push({
+        ...structuredClone(component),
+        id: componentIdMap.get(component.id) as string,
+        terminalIds: (component.terminalIds ?? []).map((terminalId) =>
+          globalProjectId(diagram.id, terminalId)
+        ),
+        sourceEntity: {
+          ...(component.sourceEntity ?? {}),
+          diagramId: diagram.id,
+          diagramName: diagram.name,
+          localId: component.id,
+        },
+      });
+    });
+
+    model.terminals.forEach((terminal) => {
+      terminals.push({
+        ...structuredClone(terminal),
+        id: globalProjectId(diagram.id, terminal.id),
+        componentId: componentIdMap.get(terminal.componentId) ??
+          globalProjectId(diagram.id, terminal.componentId),
+        connectionNodeId: terminal.connectionNodeId
+          ? connectionNodeIdMap.get(terminal.connectionNodeId) ??
+            globalProjectId(diagram.id, terminal.connectionNodeId)
+          : null,
+        sourceEndpoint: terminal.sourceEndpoint
+          ? { ...terminal.sourceEndpoint, diagramId: diagram.id }
+          : terminal.sourceEndpoint,
+      });
+    });
+
+    model.connectionNodes.forEach((node) => {
+      connectionNodes.push({
+        ...structuredClone(node),
+        id: connectionNodeIdMap.get(node.id) as string,
+        voltageLevelId: node.voltageLevelId
+          ? globalProjectId(diagram.id, node.voltageLevelId)
+          : null,
+        voltageLevelIds: (node.voltageLevelIds ?? []).map((id) =>
+          globalProjectId(diagram.id, id)
+        ),
+        busComponentId: node.busComponentId
+          ? componentIdMap.get(node.busComponentId) ??
+            globalProjectId(diagram.id, node.busComponentId)
+          : null,
+        busComponentIds: (node.busComponentIds ?? []).map((id) =>
+          componentIdMap.get(id) ?? globalProjectId(diagram.id, id)
+        ),
+        memberEndpointIds: (node.memberEndpointIds ?? []).map((id) =>
+          globalProjectId(diagram.id, id)
+        ),
+        sourceDiagramId: diagram.id,
+        sourceDiagramIds: [diagram.id],
+      });
+    });
+
+    Object.values(document.nodes ?? {}).forEach((entity) => {
+      Object.keys(entity.logicalConnections ?? {}).forEach((terminalKey) => {
+        const localTerminalId = `${entity.id}:terminal:${terminalKey}`;
+        if (model.terminals.some((terminal) => terminal.id === localTerminalId)) {
+          terminalLookup.set(
+            logicalTerminalKey(diagram.id, "node", entity.id, terminalKey),
+            globalProjectId(diagram.id, localTerminalId),
+          );
+        }
+      });
+      model.terminals
+        .filter((terminal) => terminal.componentId === entity.id)
+        .forEach((terminal) => {
+          const portId = String(terminal.sourceEndpoint?.portId ?? "");
+          if (portId) {
+            terminalLookup.set(
+              logicalTerminalKey(diagram.id, "node", entity.id, portId),
+              globalProjectId(diagram.id, terminal.id),
+            );
+          }
+        });
+    });
+
+    Object.values(document.edges ?? {})
+      .filter((entity) => entity.kind === "line")
+      .forEach((entity) => {
+        ["from", "to"].forEach((terminalKey) => {
+          const localTerminalId = `${entity.id}:terminal:${terminalKey}`;
+          if (model.terminals.some((terminal) => terminal.id === localTerminalId)) {
+            terminalLookup.set(
+              logicalTerminalKey(diagram.id, "edge", entity.id, terminalKey),
+              globalProjectId(diagram.id, localTerminalId),
+            );
+          }
+        });
+      });
+  });
+
+  const terminalById = new Map(terminals.map((terminal) => [terminal.id, terminal]));
+  const unionFind = new ProjectUnionFind(connectionNodes.map((node) => node.id));
+
+  sources.forEach(({ diagram, document }) => {
+    const entities = [
+      ...Object.values(document.nodes ?? {}).map((entity) => ({
+        entity,
+        entityKind: "node",
+      })),
+      ...Object.values(document.edges ?? {})
+        .filter((entity) => entity.kind === "line")
+        .map((entity) => ({ entity, entityKind: "edge" })),
+    ];
+
+    entities.forEach(({ entity, entityKind }) => {
+      Object.entries(entity.logicalConnections ?? {}).forEach(
+        ([terminalKey, rawReference]) => {
+          const reference = normalizeLogicalReference(rawReference);
+          if (!reference) {
+            throw new Error(`INVALID_LOGICAL_CONNECTION:${diagram.id}:${entity.id}:${terminalKey}`);
+          }
+          const sourceTerminalId = terminalLookup.get(
+            logicalTerminalKey(diagram.id, entityKind, entity.id, terminalKey),
+          );
+          const targetTerminalId = terminalLookup.get(
+            logicalTerminalKey(
+              reference.diagramId,
+              reference.entityKind,
+              reference.entityId,
+              reference.terminalKey,
+            ),
+          );
+          if (!sourceTerminalId || !targetTerminalId) {
+            throw new Error(
+              `LOGICAL_CONNECTION_TARGET_MISSING:${diagram.id}:${entity.id}:${terminalKey}`,
+            );
+          }
+          const sourceNodeId = terminalById.get(sourceTerminalId)?.connectionNodeId;
+          const targetNodeId = terminalById.get(targetTerminalId)?.connectionNodeId;
+          if (!sourceNodeId || !targetNodeId) {
+            throw new Error(
+              `LOGICAL_CONNECTION_NODE_MISSING:${diagram.id}:${entity.id}:${terminalKey}`,
+            );
+          }
+          unionFind.union(sourceNodeId, targetNodeId);
+        },
+      );
+    });
+  });
+
+  const grouped = new Map<string, ConnectionNode[]>();
+  connectionNodes.forEach((node) => {
+    const root = unionFind.find(node.id) ?? node.id;
+    grouped.set(root, [...(grouped.get(root) ?? []), node]);
+  });
+
+  const canonicalByOriginal = new Map<string, string>();
+  const mergedConnectionNodes = [...grouped.values()].map((nodes) => {
+    const originalIds = nodes.map((node) => node.id).sort();
+    const busComponentIds = [
+      ...new Set(
+        nodes.flatMap((node) => [
+          ...(node.busComponentIds ?? []),
+          ...(node.busComponentId ? [node.busComponentId] : []),
+        ]),
+      ),
+    ].sort();
+    const id = busComponentIds.length === 1
+      ? `cn-${busComponentIds[0]}`
+      : `cn-project-${projectHashToken(originalIds.join("|"))}`;
+    originalIds.forEach((originalId) => canonicalByOriginal.set(originalId, id));
+
+    const nominalVoltages = [
+      ...new Set(
+        nodes
+          .map((node) => Number(node.nominalVoltageKv))
+          .filter((value) => Number.isFinite(value) && value > 0)
+          .map((value) => Number(value.toFixed(9))),
+      ),
+    ];
+    const voltageLevelIds = [
+      ...new Set(nodes.flatMap((node) => node.voltageLevelIds ?? []).filter(Boolean)),
+    ].sort();
+
+    return {
+      id,
+      nominalVoltageKv: nominalVoltages[0] ?? null,
+      voltageLevelId: voltageLevelIds[0] ?? null,
+      voltageLevelIds,
+      voltageConflict:
+        nominalVoltages.length > 1 || nodes.some((node) => node.voltageConflict),
+      ...(busComponentIds[0] ? { busComponentId: busComponentIds[0] } : {}),
+      busComponentIds,
+      memberEndpointIds: [
+        ...new Set(nodes.flatMap((node) => node.memberEndpointIds ?? [])),
+      ].sort(),
+      sourceDiagramIds: [
+        ...new Set(
+          nodes.flatMap((node) => node.sourceDiagramIds ?? [node.sourceDiagramId])
+            .filter(Boolean) as string[],
+        ),
+      ].sort(),
+    };
+  });
+
+  return {
+    ...structuredClone(active.document),
+    id: active.diagram.id,
+    name: projectName,
+    analysisScope: "PROJECT",
+    projectId: active.diagram.projectId,
+    multiDiagram: true,
+    sourceDiagramId: active.diagram.id,
+    sourceDiagramIds: sources.map((item) => item.diagram.id),
+    electricalModel: {
+      schemaVersion: 2,
+      components,
+      terminals: terminals.map((terminal) => ({
+        ...terminal,
+        connectionNodeId: terminal.connectionNodeId
+          ? canonicalByOriginal.get(terminal.connectionNodeId) ??
+            terminal.connectionNodeId
+          : null,
+      })),
+      connectionNodes: mergedConnectionNodes,
+    },
+    operatingCases: namespaceOperatingCases(
+      active.document.operatingCases,
+      active.diagram.id,
+    ),
+  } as DiagramDocument & Record<string, unknown>;
+}
 
 function getIdentity(eventIdentity: unknown) {
   const identity = eventIdentity as AppSyncIdentityCognito | null;
@@ -442,6 +880,111 @@ function validateElectricalModel(
       ),
     );
   }
+
+  connectionNodes.forEach((node) => {
+    if (node.voltageConflict) {
+      errors.push(
+        createIssue(
+          "CONNECTION_VOLTAGE_CONFLICT",
+          `El nodo eléctrico ${node.id} une niveles de tensión incompatibles.`,
+          node.busComponentId || undefined,
+        ),
+      );
+    }
+  });
+
+  const adjacency = new Map(
+    connectionNodes.map((node) => [node.id, new Set<string>()]),
+  );
+  const electricallyLinks = (component: ElectricalComponent) => {
+    if (!isComponentInService(component)) return false;
+    if (new Set(["LINE", "TRANSFORMER_2W", "TRANSFORMER_3W"]).has(component.kind)) {
+      return true;
+    }
+    if (component.kind === "SWITCH") {
+      return String(parameterValue(component, "state") || "CLOSED").toUpperCase() !== "OPEN";
+    }
+    return false;
+  };
+
+  activeComponents.filter(electricallyLinks).forEach((component) => {
+    const nodeIds = [
+      ...new Set(
+        (terminalsByComponent.get(component.id) ?? [])
+          .map((terminal) => terminal.connectionNodeId)
+          .filter(Boolean) as string[],
+      ),
+    ];
+    nodeIds.forEach((from) => nodeIds.forEach((to) => {
+      if (from !== to) adjacency.get(from)?.add(to);
+    }));
+  });
+
+  const islandByNode = new Map<string, string>();
+  let islandCounter = 0;
+  connectionNodes.forEach((node) => {
+    if (islandByNode.has(node.id)) return;
+    islandCounter += 1;
+    const islandId = `island-${islandCounter}`;
+    const pending = [node.id];
+    while (pending.length) {
+      const current = pending.pop();
+      if (!current || islandByNode.has(current)) continue;
+      islandByNode.set(current, islandId);
+      adjacency.get(current)?.forEach((next) => pending.push(next));
+    }
+  });
+
+  const islandSummary = new Map<
+    string,
+    { energized: boolean; slackIds: Set<string> }
+  >();
+  activeComponents.forEach((component) => {
+    const nodeIds = [
+      ...new Set(
+        (terminalsByComponent.get(component.id) ?? [])
+          .map((terminal) => terminal.connectionNodeId)
+          .filter(Boolean) as string[],
+      ),
+    ];
+    nodeIds.forEach((nodeId) => {
+      const islandId = islandByNode.get(nodeId);
+      if (!islandId) return;
+      const summary = islandSummary.get(islandId) ?? {
+        energized: false,
+        slackIds: new Set<string>(),
+      };
+      summary.energized ||= new Set([
+        "LOAD",
+        "GENERATOR",
+        "EXTERNAL_GRID",
+        "SHUNT",
+      ]).has(component.kind);
+      if (slackComponents.some((slack) => slack.id === component.id)) {
+        summary.slackIds.add(component.id);
+      }
+      islandSummary.set(islandId, summary);
+    });
+  });
+
+  islandSummary.forEach((summary, islandId) => {
+    if (summary.energized && summary.slackIds.size === 0) {
+      errors.push(
+        createIssue(
+          "ENERGIZED_ISLAND_WITHOUT_REFERENCE",
+          `La isla eléctrica ${islandId} contiene equipos en servicio, pero no posee referencia Slack.`,
+        ),
+      );
+    }
+    if (summary.slackIds.size > 1) {
+      warnings.push(
+        createIssue(
+          "MULTIPLE_SLACK_REFERENCES",
+          `La isla eléctrica ${islandId} contiene ${summary.slackIds.size} referencias Slack.`,
+        ),
+      );
+    }
+  });
 
   activeComponents.forEach((component) => {
     const componentTerminals = terminalsByComponent.get(component.id) ?? [];
@@ -970,24 +1513,50 @@ async function startAnalysis(
     throw new Error("WRITE_ACCESS_REQUIRED");
   }
 
-  const currentVersion = Number(diagram.storageVersion ?? 0);
+  const multiDiagram = Boolean(project.multiDiagram);
+  const projectDiagrams = multiDiagram
+    ? await listProjectDiagrams(project.id)
+    : [diagram];
+  if (!projectDiagrams.some((item) => item.id === diagram.id)) {
+    throw new Error("ACTIVE_DIAGRAM_NOT_IN_PROJECT");
+  }
+
+  const expectedVersions = multiDiagram
+    ? parseExpectedDiagramVersions(args.expectedDiagramVersionsJson)
+    : { [diagram.id]: expectedVersion };
+  const diagramVersions = Object.fromEntries(
+    projectDiagrams.map((item) => [item.id, Number(item.storageVersion ?? 0)]),
+  );
+
+  projectDiagrams.forEach((item) => {
+    const current = Number(item.storageVersion ?? 0);
+    const expected = expectedVersions[item.id];
+    if (!expected) {
+      throw new Error(`EXPECTED_DIAGRAM_VERSION_MISSING:${item.id}`);
+    }
+    if (current !== expected) {
+      throw new Error(
+        `DIAGRAM_VERSION_MISMATCH:${item.id}:expected=${expected},current=${current}`,
+      );
+    }
+  });
+
+  const currentVersion = diagramVersions[diagram.id];
   if (currentVersion !== expectedVersion) {
     throw new Error(
-      `DIAGRAM_VERSION_MISMATCH: expected=${expectedVersion}, current=${currentVersion}`,
+      `DIAGRAM_VERSION_MISMATCH:${diagram.id}:expected=${expectedVersion},current=${currentVersion}`,
     );
   }
 
-  const expectedDiagramKey = `projects/${project.id}/diagrams/${diagram.id}/document.json`;
-  if (diagram.storageKey !== expectedDiagramKey) {
-    throw new Error("DIAGRAM_STORAGE_KEY_MISMATCH");
-  }
-
-  const diagramObject = await s3.send(
-    new GetObjectCommand({ Bucket: BUCKET, Key: expectedDiagramKey }),
+  const sources = await Promise.all(
+    projectDiagrams.map(async (projectDiagram) => ({
+      diagram: projectDiagram,
+      document: await loadDiagramDocument(project.id, projectDiagram),
+    })),
   );
-  const document = JSON.parse(
-    await bodyToString(diagramObject.Body),
-  ) as DiagramDocument;
+  const document = multiDiagram
+    ? composeProjectDocument(sources, diagram.id, project.name)
+    : sources[0].document;
 
   const workspaceId = safeSegment(project.workspaceId, "workspace_id");
   const studyId = `study-${createHash("sha256")
@@ -1005,6 +1574,12 @@ async function startAnalysis(
     operatingCaseId,
     analysisType,
     analysisOptions,
+  });
+  Object.assign(input, {
+    projectId: project.id,
+    multiDiagram,
+    diagramVersions,
+    sourceDiagramIds: projectDiagrams.map((item) => item.id),
   });
 
   const createResult = await client.models.AnalysisStudy.create({
@@ -1027,6 +1602,10 @@ async function startAnalysis(
     status: "VALIDATING",
     clientRequestId,
     inputDiagramVersion: currentVersion,
+    inputProjectVersionsJson: multiDiagram
+      ? JSON.stringify(diagramVersions)
+      : undefined,
+    multiDiagram,
     inputStorageKey,
     requestedMemoryMb: 3072,
     executionTimeoutSeconds: 840,

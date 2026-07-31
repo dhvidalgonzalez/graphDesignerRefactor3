@@ -7,6 +7,7 @@ export default function CreateProjectModal() {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [sample, setSample] = useState(false);
+  const [multiDiagram, setMultiDiagram] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -15,6 +16,7 @@ export default function CreateProjectModal() {
     setName("");
     setDescription("");
     setSample(false);
+    setMultiDiagram(false);
     setSubmitting(false);
     setError("");
   }, [createProjectOpen]);
@@ -24,7 +26,7 @@ export default function CreateProjectModal() {
     setSubmitting(true);
     setError("");
     try {
-      await actions.createProject({ name, description, sample });
+      await actions.createProject({ name, description, sample, multiDiagram });
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "No se pudo crear el proyecto.");
       setSubmitting(false);
@@ -71,6 +73,18 @@ export default function CreateProjectModal() {
           <span>
             <strong>Incluir diagrama de demostración</strong>
             <small>Agrega el circuito de prueba de 220/66 kV. Si no, se crea una hoja vacía.</small>
+          </span>
+        </label>
+        <label className="project-template-option project-template-option--advanced">
+          <input
+            type="checkbox"
+            checked={multiDiagram}
+            disabled={submitting}
+            onChange={(event) => setMultiDiagram(event.target.checked)}
+          />
+          <span>
+            <strong>Proyecto multidiagrama</strong>
+            <small>Permite conectar terminales entre hojas y analizar todos los diagramas como una sola red eléctrica.</small>
           </span>
         </label>
         {error && <div className="form-error-message">{error}</div>}

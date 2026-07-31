@@ -96,7 +96,10 @@ export default function WorkspaceDashboard() {
                     </svg>
                   </span>
                   <span className="workspace-project-card-copy">
-                    <strong>{project.name}</strong>
+                    <strong>
+                      {project.name}
+                      {project.multiDiagram && <span className="multi-diagram-inline-badge">Multidiagrama</span>}
+                    </strong>
                     <small>{project.description || "Proyecto de diagramas eléctricos"}</small>
                   </span>
                 </button>

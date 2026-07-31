@@ -25,6 +25,7 @@ import {
 } from "../domain/electrical/topology.js";
 import { createId } from "../utils/id.js";
 import { synchronizeElectricalModel } from "../domain/electrical/electricalModel.js";
+import { normalizeLogicalConnectionReference } from "../domain/electrical/projectTopology.js";
 import {
   markParameterAsUserValue,
   patchParameterMetadata,
@@ -371,6 +372,18 @@ export class EditorStore {
         this.mutateDocument((document) => {
           const node = document.nodes[nodeId];
           if (node) node.properties = { ...node.properties, ...patch };
+        });
+      },
+
+      setEntityTerminalConnection: (kind, id, terminalKey, reference) => {
+        this.mutateDocument((document) => {
+          const entity = kind === "edge" ? document.edges[id] : document.nodes[id];
+          if (!entity) return;
+          const normalized = normalizeLogicalConnectionReference(reference);
+          const next = { ...(entity.logicalConnections ?? {}) };
+          if (normalized) next[String(terminalKey)] = normalized;
+          else delete next[String(terminalKey)];
+          entity.logicalConnections = next;
         });
       },
 

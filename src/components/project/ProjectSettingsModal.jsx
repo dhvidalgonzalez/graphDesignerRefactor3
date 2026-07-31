@@ -8,6 +8,7 @@ export default function ProjectSettingsModal() {
   const { activeProject, projectSettingsOpen, actions } = useWorkspace();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [multiDiagram, setMultiDiagram] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -15,6 +16,7 @@ export default function ProjectSettingsModal() {
     if (!activeProject) return;
     setName(activeProject.name);
     setDescription(activeProject.description);
+    setMultiDiagram(Boolean(activeProject.multiDiagram));
     setSubmitting(false);
     setError("");
   }, [activeProject, projectSettingsOpen]);
@@ -29,6 +31,7 @@ export default function ProjectSettingsModal() {
       await actions.updateProject({
         name: name.trim() || "Proyecto sin nombre",
         description: description.trim(),
+        multiDiagram,
       });
       actions.closeProjectSettings();
     } catch (nextError) {
@@ -69,9 +72,22 @@ export default function ProjectSettingsModal() {
             <span>Descripción</span>
             <textarea rows={5} maxLength={500} disabled={!activeProject.canManage || submitting} value={description} onChange={(event) => setDescription(event.target.value)} />
           </label>
+          <label className="project-template-option project-template-option--advanced">
+            <input
+              type="checkbox"
+              checked={multiDiagram}
+              disabled={!activeProject.canManage || submitting}
+              onChange={(event) => setMultiDiagram(event.target.checked)}
+            />
+            <span>
+              <strong>Proyecto multidiagrama</strong>
+              <small>Fusiona la topología eléctrica de todas las hojas y habilita referencias lógicas entre terminales.</small>
+            </span>
+          </label>
           <div className="project-readonly-metadata">
             <span>Identificador</span><code>{activeProject.id}</code>
             <span>Diagramas</span><strong>{activeProject.diagrams.length}</strong>
+            <span>Modo de análisis</span><strong>{multiDiagram ? "Red multidiagrama" : "Hoja individual"}</strong>
             <span>Persistencia</span><strong>DynamoDB + S3</strong>
           </div>
         </section>

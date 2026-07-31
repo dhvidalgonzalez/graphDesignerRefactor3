@@ -40,6 +40,20 @@ export async function listAnalysisStudiesByDiagramService(diagramId, limit = 30)
   );
 }
 
+export async function listAnalysisStudiesByProjectService(projectId, limit = 50) {
+  if (!projectId) return [];
+  const result = await client.models.AnalysisStudy.listAnalysisStudiesByProject(
+    { projectId },
+    { limit },
+  );
+  if (result.errors?.length) {
+    throw new Error(errorMessage(result.errors, "No se pudo cargar el historial multidiagrama."));
+  }
+  return [...result.data].sort(
+    (left, right) => new Date(right.requestedAt).getTime() - new Date(left.requestedAt).getTime(),
+  );
+}
+
 export async function requestAnalysisArtifactService(studyId, artifactType) {
   const result = await client.queries.requestAnalysisArtifact({
     studyId,

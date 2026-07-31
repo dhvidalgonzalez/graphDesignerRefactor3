@@ -168,6 +168,7 @@ const schema = a
         workspace: a.belongsTo("Workspace", "workspaceId"),
         name: a.string().required(),
         description: a.string(),
+        multiDiagram: a.boolean().default(false),
         status: a.ref("ProjectStatus").required(),
         activeDiagramId: a.id(),
         ownerProfileId: a.id().required(),
@@ -298,6 +299,8 @@ const schema = a
         status: a.ref("AnalysisStatus").required(),
         clientRequestId: a.string().required(),
         inputDiagramVersion: a.integer().required(),
+        inputProjectVersionsJson: a.string(),
+        multiDiagram: a.boolean().default(false),
         inputStorageKey: a.string(),
         resultStorageKey: a.string(),
         diagnosticsStorageKey: a.string(),
@@ -325,6 +328,9 @@ const schema = a
         index("diagramId")
           .sortKeys(["requestedAt"])
           .queryField("listAnalysisStudiesByDiagram"),
+        index("projectId")
+          .sortKeys(["requestedAt"])
+          .queryField("listAnalysisStudiesByProject"),
         index("clientRequestId").queryField("listAnalysisStudiesByClientRequest"),
       ])
       .authorization((allow) => [
@@ -589,6 +595,7 @@ const schema = a
         analysisOptionsJson: a.string(),
         executionPreference: a.ref("ExecutionPreference"),
         expectedDiagramVersion: a.integer().required(),
+        expectedDiagramVersionsJson: a.string(),
         clientRequestId: a.string().required(),
         name: a.string(),
       })

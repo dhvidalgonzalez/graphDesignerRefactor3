@@ -1,4 +1,5 @@
 import FieldInput from "../common/FieldInput.jsx";
+import TerminalConnectionsEditor from "./TerminalConnectionsEditor.jsx";
 import { getSymbolDefinition } from "../../domain/catalog/symbolCatalog.js";
 import { getVoltageLevel, getVoltageLevels } from "../../domain/electrical/voltageLevels.js";
 import { shallowEqual, useEditorActions, useEditorSelector } from "../../editor/EditorContext.jsx";
@@ -56,6 +57,14 @@ export default function PropertiesPanel() {
             </label>
           ))}
         </section>
+
+        {definition.electrical !== false && (
+          <TerminalConnectionsEditor
+            document={data.document}
+            entityKind="node"
+            entityId={node.id}
+          />
+        )}
 
         {definition.electrical !== false && (
           <section className="property-section property-section--electric">
@@ -124,6 +133,14 @@ export default function PropertiesPanel() {
             <button disabled={data.selection.vertexIndex === null} onClick={actions.deleteEdgeVertex}>Eliminar vértice seleccionado</button>
           </div>
         </section>
+
+        {isLine && (
+          <TerminalConnectionsEditor
+            document={data.document}
+            entityKind="edge"
+            entityId={selectedEdge.id}
+          />
+        )}
 
         {isLine ? (
           <section className="property-section property-section--electric">

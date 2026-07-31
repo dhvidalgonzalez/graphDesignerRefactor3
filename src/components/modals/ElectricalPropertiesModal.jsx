@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import Modal from "../common/Modal.jsx";
 import FieldInput from "../common/FieldInput.jsx";
+import TerminalConnectionsEditor from "../panels/TerminalConnectionsEditor.jsx";
 import { getSymbolDefinition } from "../../domain/catalog/symbolCatalog.js";
 import { LINE_ELECTRICAL_FIELDS } from "../../domain/electrical/electricalFields.js";
-import { getParameterMetadata } from "../../domain/electrical/parameterValue.js";
 import { getVoltageLevels } from "../../domain/electrical/voltageLevels.js";
 import {
   createAnalysisResultIndex,
@@ -18,20 +18,6 @@ import {
   voltagePuColor,
 } from "../../domain/analysis/analysisResults.js";
 import { shallowEqual, useEditorActions, useEditorSelector } from "../../editor/EditorContext.jsx";
-
-const SOURCE_OPTIONS = [
-  { value: "DEFAULT", label: "Predeterminado" },
-  { value: "USER", label: "Ingresado por usuario" },
-  { value: "CATALOG", label: "Catálogo" },
-  { value: "IMPORTED", label: "Importado" },
-  { value: "CALCULATED", label: "Calculado" },
-];
-
-const STATUS_OPTIONS = [
-  { value: "MISSING", label: "Faltante" },
-  { value: "ASSUMED", label: "Asumido" },
-  { value: "CONFIRMED", label: "Confirmado" },
-];
 
 function groupFields(fields) {
   return fields.reduce((groups, field) => {
@@ -227,78 +213,45 @@ export default function ElectricalPropertiesModal() {
 
       <div className="electrical-modal-tabs" role="tablist">
         <button type="button" className={tab === "parameters" ? "active" : ""} onClick={() => setTab("parameters")}>Parámetros</button>
+        <button type="button" className={tab === "connections" ? "active" : ""} onClick={() => setTab("connections")}>Conexiones</button>
         <button type="button" className={tab === "results" ? "active" : ""} onClick={() => setTab("results")}>
           Resultado activo {activeResult ? "●" : ""}
         </button>
       </div>
 
       {tab === "parameters" && (
-        <>
-          <div className="parameter-trace-help">
-            <strong>Trazabilidad de parámetros</strong>
-            <span>Cada valor conserva su procedencia y si está faltante, asumido o confirmado. Los cambios manuales se marcan automáticamente como confirmados.</span>
-          </div>
+        <div className="electrical-form-grid">
+          {Object.entries(grouped).map(([section, fields]) => (
+            <section className="electrical-section" key={section}>
+              <h3>{section}</h3>
+              {fields.map((field) => (
+                <div className="parameter-field-card" key={field.key}>
+                  <label className="property-field">
+                    <span>{field.label}</span>
+                    <FieldInput
+                      field={field}
+                      value={entity.properties[field.key]}
+                      voltageLevels={voltageLevels}
+                      onManageVoltage={actions.openVoltageLevels}
+                      onCreateVoltage={(value) => createAndAssignVoltage(field, value)}
+                      onCommit={(value) => commit(field, value)}
+                    />
+                  </label>
+                </div>
+              ))}
+            </section>
+          ))}
+        </div>
+      )}
 
-          <div className="electrical-form-grid">
-            {Object.entries(grouped).map(([section, fields]) => (
-              <section className="electrical-section" key={section}>
-                <h3>{section}</h3>
-                {fields.map((field) => {
-                  const metadata = getParameterMetadata(entity, field.key);
-                  return (
-                    <div className="parameter-field-card" key={field.key}>
-                      <label className="property-field">
-                        <span>{field.label}</span>
-                        <FieldInput
-                          field={field}
-                          value={entity.properties[field.key]}
-                          voltageLevels={voltageLevels}
-                          onManageVoltage={actions.openVoltageLevels}
-                          onCreateVoltage={(value) => createAndAssignVoltage(field, value)}
-                          onCommit={(value) => commit(field, value)}
-                        />
-                      </label>
-                      <div className="parameter-trace-row">
-                        <label>
-                          <span>Procedencia</span>
-                          <select
-                            value={metadata.source}
-                            onChange={(event) => actions.updateElectricalParameterMetadata(
-                              data.editor.kind,
-                              entity.id,
-                              field.key,
-                              { source: event.target.value },
-                            )}
-                          >
-                            {SOURCE_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>{option.label}</option>
-                            ))}
-                          </select>
-                        </label>
-                        <label>
-                          <span>Estado</span>
-                          <select
-                            value={metadata.status}
-                            onChange={(event) => actions.updateElectricalParameterMetadata(
-                              data.editor.kind,
-                              entity.id,
-                              field.key,
-                              { status: event.target.value },
-                            )}
-                          >
-                            {STATUS_OPTIONS.map((option) => (
-                              <option key={option.value} value={option.value}>{option.label}</option>
-                            ))}
-                          </select>
-                        </label>
-                      </div>
-                    </div>
-                  );
-                })}
-              </section>
-            ))}
-          </div>
-        </>
+      {tab === "connections" && (
+        <div className="electrical-connections-tab">
+          <TerminalConnectionsEditor
+            document={data.document}
+            entityKind={data.editor.kind}
+            entityId={entity.id}
+          />
+        </div>
       )}
 
       {tab === "results" && (
