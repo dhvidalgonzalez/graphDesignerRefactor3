@@ -310,10 +310,17 @@ async function loadDiagramDocument(
   if (diagram.storageKey !== expectedKey) {
     throw new Error(`DIAGRAM_STORAGE_KEY_MISMATCH:${diagram.id}`);
   }
-  const object = await s3.send(
-    new GetObjectCommand({ Bucket: BUCKET, Key: expectedKey }),
-  );
-  return JSON.parse(await bodyToString(object.Body)) as DiagramDocument;
+  try {
+    const object = await s3.send(
+      new GetObjectCommand({ Bucket: BUCKET, Key: expectedKey }),
+    );
+    return JSON.parse(await bodyToString(object.Body)) as DiagramDocument;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `DIAGRAM_DOCUMENT_LOAD_FAILED:${diagram.id}:${diagram.name}:${message}`,
+    );
+  }
 }
 
 function namespaceOperatingCases(
@@ -821,6 +828,35 @@ function createIssue(code: string, message: string, componentId?: string) {
   };
 }
 
+function addValidationIssueContext(
+  validation: ReturnType<typeof validateElectricalModel>,
+  components: ElectricalComponent[],
+) {
+  const componentById = new Map(
+    components.map((component) => [component.id, component]),
+  );
+  const decorate = (item: ReturnType<typeof createIssue>) => {
+    if (!item.componentId) return item;
+    const component = componentById.get(item.componentId);
+    const source = component?.sourceEntity;
+    if (!component || !source?.diagramId) return item;
+    const diagramName = String(source.diagramName || source.diagramId);
+    const componentName = String(component.name || source.localId || component.id);
+    return {
+      ...item,
+      diagramId: String(source.diagramId),
+      diagramName,
+      componentName,
+      message: `${item.message} [${diagramName} / ${componentName}]`,
+    };
+  };
+  return {
+    ...validation,
+    errors: validation.errors.map(decorate),
+    warnings: validation.warnings.map(decorate),
+  };
+}
+
 function validateElectricalModel(
   components: ElectricalComponent[],
   terminals: ElectricalTerminal[],
@@ -1315,7 +1351,7 @@ function modelForOperatingCase(
     connectionNodes,
   );
   return {
-    validation,
+    validation: addValidationIssueContext(validation, appliedComponents),
     electricalModel: {
       schemaVersion: Number(document.electricalModel?.schemaVersion) || 1,
       components: appliedComponents,
