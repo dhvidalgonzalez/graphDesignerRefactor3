@@ -27,8 +27,9 @@ const lambda = new LambdaClient({});
 const ssm = new SSMClient({});
 
 const BUCKET = env.GRAPH_DESIGNER_DOCUMENTS_BUCKET_NAME;
-const STORAGE_PREFIX = String(env.ANALYSIS_STORAGE_PREFIX || "power-flow")
-  .replace(/^\/+|\/+$/g, "");
+const STORAGE_PREFIX = String(
+  env.ANALYSIS_STORAGE_PREFIX || "power-flow",
+).replace(/^\/+|\/+$/g, "");
 const WORKER_PARAMETER =
   env.ANALYSIS_WORKER_ARN_PARAMETER || env.POWER_FLOW_WORKER_ARN_PARAMETER;
 const TICKET_EXPIRATION_SECONDS = 300;
@@ -182,7 +183,6 @@ type DiagramDocument = {
   };
 };
 
-
 const GLOBAL_SEPARATOR = "::";
 
 class ProjectUnionFind {
@@ -243,9 +243,13 @@ function normalizeLogicalReference(
 ) {
   if (!candidate || typeof candidate !== "object") return null;
   const diagramId = String(candidate.diagramId || "").trim();
-  const entityId = String(candidate.entityId || candidate.componentId || "").trim();
+  const entityId = String(
+    candidate.entityId || candidate.componentId || "",
+  ).trim();
   const entityKind = String(candidate.entityKind || "node").toLowerCase();
-  const terminalKey = String(candidate.terminalKey || candidate.portId || "").trim();
+  const terminalKey = String(
+    candidate.terminalKey || candidate.portId || "",
+  ).trim();
   if (
     !diagramId ||
     !entityId ||
@@ -269,13 +273,15 @@ function parseExpectedDiagramVersions(value?: string | null) {
     throw new Error("INVALID_EXPECTED_DIAGRAM_VERSIONS_JSON");
   }
   return Object.fromEntries(
-    Object.entries(parsed as Record<string, unknown>).map(([diagramId, version]) => {
-      const normalized = Number(version);
-      if (!Number.isInteger(normalized) || normalized <= 0) {
-        throw new Error(`INVALID_EXPECTED_DIAGRAM_VERSION:${diagramId}`);
-      }
-      return [diagramId, normalized];
-    }),
+    Object.entries(parsed as Record<string, unknown>).map(
+      ([diagramId, version]) => {
+        const normalized = Number(version);
+        if (!Number.isInteger(normalized) || normalized <= 0) {
+          throw new Error(`INVALID_EXPECTED_DIAGRAM_VERSION:${diagramId}`);
+        }
+        return [diagramId, normalized];
+      },
+    ),
   );
 }
 
@@ -291,7 +297,9 @@ async function listProjectDiagrams(projectId: string) {
     diagrams.push(...page.data.filter((item) => item.status !== "ARCHIVED"));
     nextToken = page.nextToken;
   } while (nextToken);
-  return diagrams.sort((left, right) => (left.position ?? 0) - (right.position ?? 0));
+  return diagrams.sort(
+    (left, right) => (left.position ?? 0) - (right.position ?? 0),
+  );
 }
 
 async function loadDiagramDocument(
@@ -315,12 +323,14 @@ function namespaceOperatingCases(
   return normalizeCases(operatingCases).map((operatingCase) => ({
     ...structuredClone(operatingCase),
     overrides: Object.fromEntries(
-      Object.entries(operatingCase.overrides ?? {}).map(([componentId, patch]) => [
-        componentId.includes(GLOBAL_SEPARATOR)
-          ? componentId
-          : globalProjectId(diagramId, componentId),
-        patch,
-      ]),
+      Object.entries(operatingCase.overrides ?? {}).map(
+        ([componentId, patch]) => [
+          componentId.includes(GLOBAL_SEPARATOR)
+            ? componentId
+            : globalProjectId(diagramId, componentId),
+          patch,
+        ],
+      ),
     ),
   }));
 }
@@ -333,7 +343,8 @@ function composeProjectDocument(
   activeDiagramId: string,
   projectName: string,
 ) {
-  const active = sources.find((item) => item.diagram.id === activeDiagramId) ?? sources[0];
+  const active =
+    sources.find((item) => item.diagram.id === activeDiagramId) ?? sources[0];
   if (!active) throw new Error("PROJECT_HAS_NO_DIAGRAMS");
 
   const components: ElectricalComponent[] = [];
@@ -343,33 +354,37 @@ function composeProjectDocument(
 
   sources.forEach(({ diagram, document }) => {
     const model = document.electricalModel;
+    const modelComponents = model?.components;
+    const modelTerminals = model?.terminals;
+    const modelConnectionNodes = model?.connectionNodes;
+
     if (
-      !Array.isArray(model?.components) ||
-      !Array.isArray(model?.terminals) ||
-      !Array.isArray(model?.connectionNodes)
+      !Array.isArray(modelComponents) ||
+      !Array.isArray(modelTerminals) ||
+      !Array.isArray(modelConnectionNodes)
     ) {
       throw new Error(`ELECTRICAL_MODEL_MISSING:${diagram.id}`);
     }
 
     const componentIdMap = new Map(
-      model.components.map((component) => [
+      modelComponents.map((component) => [
         component.id,
         globalProjectId(diagram.id, component.id),
       ]),
     );
     const connectionNodeIdMap = new Map(
-      model.connectionNodes.map((node) => [
+      modelConnectionNodes.map((node) => [
         node.id,
         globalProjectId(diagram.id, node.id),
       ]),
     );
 
-    model.components.forEach((component) => {
+    modelComponents.forEach((component) => {
       components.push({
         ...structuredClone(component),
         id: componentIdMap.get(component.id) as string,
         terminalIds: (component.terminalIds ?? []).map((terminalId) =>
-          globalProjectId(diagram.id, terminalId)
+          globalProjectId(diagram.id, terminalId),
         ),
         sourceEntity: {
           ...(component.sourceEntity ?? {}),
@@ -380,15 +395,16 @@ function composeProjectDocument(
       });
     });
 
-    model.terminals.forEach((terminal) => {
+    modelTerminals.forEach((terminal) => {
       terminals.push({
         ...structuredClone(terminal),
         id: globalProjectId(diagram.id, terminal.id),
-        componentId: componentIdMap.get(terminal.componentId) ??
+        componentId:
+          componentIdMap.get(terminal.componentId) ??
           globalProjectId(diagram.id, terminal.componentId),
         connectionNodeId: terminal.connectionNodeId
-          ? connectionNodeIdMap.get(terminal.connectionNodeId) ??
-            globalProjectId(diagram.id, terminal.connectionNodeId)
+          ? (connectionNodeIdMap.get(terminal.connectionNodeId) ??
+            globalProjectId(diagram.id, terminal.connectionNodeId))
           : null,
         sourceEndpoint: terminal.sourceEndpoint
           ? { ...terminal.sourceEndpoint, diagramId: diagram.id }
@@ -396,7 +412,7 @@ function composeProjectDocument(
       });
     });
 
-    model.connectionNodes.forEach((node) => {
+    modelConnectionNodes.forEach((node) => {
       connectionNodes.push({
         ...structuredClone(node),
         id: connectionNodeIdMap.get(node.id) as string,
@@ -404,17 +420,17 @@ function composeProjectDocument(
           ? globalProjectId(diagram.id, node.voltageLevelId)
           : null,
         voltageLevelIds: (node.voltageLevelIds ?? []).map((id) =>
-          globalProjectId(diagram.id, id)
+          globalProjectId(diagram.id, id),
         ),
         busComponentId: node.busComponentId
-          ? componentIdMap.get(node.busComponentId) ??
-            globalProjectId(diagram.id, node.busComponentId)
+          ? (componentIdMap.get(node.busComponentId) ??
+            globalProjectId(diagram.id, node.busComponentId))
           : null,
-        busComponentIds: (node.busComponentIds ?? []).map((id) =>
-          componentIdMap.get(id) ?? globalProjectId(diagram.id, id)
+        busComponentIds: (node.busComponentIds ?? []).map(
+          (id) => componentIdMap.get(id) ?? globalProjectId(diagram.id, id),
         ),
         memberEndpointIds: (node.memberEndpointIds ?? []).map((id) =>
-          globalProjectId(diagram.id, id)
+          globalProjectId(diagram.id, id),
         ),
         sourceDiagramId: diagram.id,
         sourceDiagramIds: [diagram.id],
@@ -424,14 +440,16 @@ function composeProjectDocument(
     Object.values(document.nodes ?? {}).forEach((entity) => {
       Object.keys(entity.logicalConnections ?? {}).forEach((terminalKey) => {
         const localTerminalId = `${entity.id}:terminal:${terminalKey}`;
-        if (model.terminals.some((terminal) => terminal.id === localTerminalId)) {
+        if (
+          modelTerminals.some((terminal) => terminal.id === localTerminalId)
+        ) {
           terminalLookup.set(
             logicalTerminalKey(diagram.id, "node", entity.id, terminalKey),
             globalProjectId(diagram.id, localTerminalId),
           );
         }
       });
-      model.terminals
+      modelTerminals
         .filter((terminal) => terminal.componentId === entity.id)
         .forEach((terminal) => {
           const portId = String(terminal.sourceEndpoint?.portId ?? "");
@@ -449,7 +467,9 @@ function composeProjectDocument(
       .forEach((entity) => {
         ["from", "to"].forEach((terminalKey) => {
           const localTerminalId = `${entity.id}:terminal:${terminalKey}`;
-          if (model.terminals.some((terminal) => terminal.id === localTerminalId)) {
+          if (
+            modelTerminals.some((terminal) => terminal.id === localTerminalId)
+          ) {
             terminalLookup.set(
               logicalTerminalKey(diagram.id, "edge", entity.id, terminalKey),
               globalProjectId(diagram.id, localTerminalId),
@@ -459,8 +479,12 @@ function composeProjectDocument(
       });
   });
 
-  const terminalById = new Map(terminals.map((terminal) => [terminal.id, terminal]));
-  const unionFind = new ProjectUnionFind(connectionNodes.map((node) => node.id));
+  const terminalById = new Map(
+    terminals.map((terminal) => [terminal.id, terminal]),
+  );
+  const unionFind = new ProjectUnionFind(
+    connectionNodes.map((node) => node.id),
+  );
 
   sources.forEach(({ diagram, document }) => {
     const entities = [
@@ -478,7 +502,9 @@ function composeProjectDocument(
         ([terminalKey, rawReference]) => {
           const reference = normalizeLogicalReference(rawReference);
           if (!reference) {
-            throw new Error(`INVALID_LOGICAL_CONNECTION:${diagram.id}:${entity.id}:${terminalKey}`);
+            throw new Error(
+              `INVALID_LOGICAL_CONNECTION:${diagram.id}:${entity.id}:${terminalKey}`,
+            );
           }
           const sourceTerminalId = terminalLookup.get(
             logicalTerminalKey(diagram.id, entityKind, entity.id, terminalKey),
@@ -496,8 +522,10 @@ function composeProjectDocument(
               `LOGICAL_CONNECTION_TARGET_MISSING:${diagram.id}:${entity.id}:${terminalKey}`,
             );
           }
-          const sourceNodeId = terminalById.get(sourceTerminalId)?.connectionNodeId;
-          const targetNodeId = terminalById.get(targetTerminalId)?.connectionNodeId;
+          const sourceNodeId =
+            terminalById.get(sourceTerminalId)?.connectionNodeId;
+          const targetNodeId =
+            terminalById.get(targetTerminalId)?.connectionNodeId;
           if (!sourceNodeId || !targetNodeId) {
             throw new Error(
               `LOGICAL_CONNECTION_NODE_MISSING:${diagram.id}:${entity.id}:${terminalKey}`,
@@ -526,10 +554,13 @@ function composeProjectDocument(
         ]),
       ),
     ].sort();
-    const id = busComponentIds.length === 1
-      ? `cn-${busComponentIds[0]}`
-      : `cn-project-${projectHashToken(originalIds.join("|"))}`;
-    originalIds.forEach((originalId) => canonicalByOriginal.set(originalId, id));
+    const id =
+      busComponentIds.length === 1
+        ? `cn-${busComponentIds[0]}`
+        : `cn-project-${projectHashToken(originalIds.join("|"))}`;
+    originalIds.forEach((originalId) =>
+      canonicalByOriginal.set(originalId, id),
+    );
 
     const nominalVoltages = [
       ...new Set(
@@ -540,7 +571,9 @@ function composeProjectDocument(
       ),
     ];
     const voltageLevelIds = [
-      ...new Set(nodes.flatMap((node) => node.voltageLevelIds ?? []).filter(Boolean)),
+      ...new Set(
+        nodes.flatMap((node) => node.voltageLevelIds ?? []).filter(Boolean),
+      ),
     ].sort();
 
     return {
@@ -549,7 +582,8 @@ function composeProjectDocument(
       voltageLevelId: voltageLevelIds[0] ?? null,
       voltageLevelIds,
       voltageConflict:
-        nominalVoltages.length > 1 || nodes.some((node) => node.voltageConflict),
+        nominalVoltages.length > 1 ||
+        nodes.some((node) => node.voltageConflict),
       ...(busComponentIds[0] ? { busComponentId: busComponentIds[0] } : {}),
       busComponentIds,
       memberEndpointIds: [
@@ -557,7 +591,8 @@ function composeProjectDocument(
       ].sort(),
       sourceDiagramIds: [
         ...new Set(
-          nodes.flatMap((node) => node.sourceDiagramIds ?? [node.sourceDiagramId])
+          nodes
+            .flatMap((node) => node.sourceDiagramIds ?? [node.sourceDiagramId])
             .filter(Boolean) as string[],
         ),
       ].sort(),
@@ -579,8 +614,8 @@ function composeProjectDocument(
       terminals: terminals.map((terminal) => ({
         ...terminal,
         connectionNodeId: terminal.connectionNodeId
-          ? canonicalByOriginal.get(terminal.connectionNodeId) ??
-            terminal.connectionNodeId
+          ? (canonicalByOriginal.get(terminal.connectionNodeId) ??
+            terminal.connectionNodeId)
           : null,
       })),
       connectionNodes: mergedConnectionNodes,
@@ -716,22 +751,26 @@ function isComponentInService(component: ElectricalComponent) {
 }
 
 function normalizeCases(candidate: OperatingCase[] | undefined) {
-  const cases = Array.isArray(candidate) && candidate.length
-    ? candidate
-    : [
-        {
-          id: "case-normal",
-          name: "Operación normal",
-          isDefault: true,
-          overrides: {},
-        },
-      ];
+  const cases =
+    Array.isArray(candidate) && candidate.length
+      ? candidate
+      : [
+          {
+            id: "case-normal",
+            name: "Operación normal",
+            isDefault: true,
+            overrides: {},
+          },
+        ];
   const defaultIndex = Math.max(
     0,
     cases.findIndex((item) => item?.isDefault),
   );
   return cases.map((item, index) => ({
-    id: safeSegment(String(item?.id || `case-${index + 1}`), "operating_case_id"),
+    id: safeSegment(
+      String(item?.id || `case-${index + 1}`),
+      "operating_case_id",
+    ),
     name: String(item?.name || `Caso ${index + 1}`),
     description: String(item?.description || ""),
     isDefault: index === defaultIndex,
@@ -774,11 +813,7 @@ function applyOperatingCase(
   };
 }
 
-function createIssue(
-  code: string,
-  message: string,
-  componentId?: string,
-) {
+function createIssue(code: string, message: string, componentId?: string) {
   return {
     code,
     message,
@@ -898,11 +933,16 @@ function validateElectricalModel(
   );
   const electricallyLinks = (component: ElectricalComponent) => {
     if (!isComponentInService(component)) return false;
-    if (new Set(["LINE", "TRANSFORMER_2W", "TRANSFORMER_3W"]).has(component.kind)) {
+    if (
+      new Set(["LINE", "TRANSFORMER_2W", "TRANSFORMER_3W"]).has(component.kind)
+    ) {
       return true;
     }
     if (component.kind === "SWITCH") {
-      return String(parameterValue(component, "state") || "CLOSED").toUpperCase() !== "OPEN";
+      return (
+        String(parameterValue(component, "state") || "CLOSED").toUpperCase() !==
+        "OPEN"
+      );
     }
     return false;
   };
@@ -915,9 +955,11 @@ function validateElectricalModel(
           .filter(Boolean) as string[],
       ),
     ];
-    nodeIds.forEach((from) => nodeIds.forEach((to) => {
-      if (from !== to) adjacency.get(from)?.add(to);
-    }));
+    nodeIds.forEach((from) =>
+      nodeIds.forEach((to) => {
+        if (from !== to) adjacency.get(from)?.add(to);
+      }),
+    );
   });
 
   const islandByNode = new Map<string, string>();
@@ -1038,10 +1080,13 @@ function validateElectricalModel(
     });
   });
 
-  const kinds = components.reduce<Record<string, number>>((result, component) => {
-    result[component.kind] = (result[component.kind] ?? 0) + 1;
-    return result;
-  }, {});
+  const kinds = components.reduce<Record<string, number>>(
+    (result, component) => {
+      result[component.kind] = (result[component.kind] ?? 0) + 1;
+      return result;
+    },
+    {},
+  );
 
   const uniqueWarnings = [
     ...new Map(
@@ -1064,8 +1109,7 @@ function validateElectricalModel(
         (kinds.TRANSFORMER_2W ?? 0) +
         (kinds.TRANSFORMER_3W ?? 0),
       loadCount: kinds.LOAD ?? 0,
-      generatorCount:
-        (kinds.GENERATOR ?? 0) + (kinds.EXTERNAL_GRID ?? 0),
+      generatorCount: (kinds.GENERATOR ?? 0) + (kinds.EXTERNAL_GRID ?? 0),
       componentCount: components.length,
       terminalCount: terminals.length,
       connectionNodeCount: connectionNodes.length,
@@ -1073,7 +1117,9 @@ function validateElectricalModel(
   };
 }
 
-function normalizeSolverOptions(candidate: Record<string, unknown> | undefined) {
+function normalizeSolverOptions(
+  candidate: Record<string, unknown> | undefined,
+) {
   const algorithms = new Set([
     "NEWTON_RAPHSON",
     "FAST_DECOUPLED",
@@ -1114,9 +1160,9 @@ function finiteNumber(
 
 function stringArray(value: unknown) {
   if (!Array.isArray(value)) return [];
-  return [...new Set(value
-    .map((item) => String(item || "").trim())
-    .filter(Boolean))];
+  return [
+    ...new Set(value.map((item) => String(item || "").trim()).filter(Boolean)),
+  ];
 }
 
 function parseAnalysisOptionsJson(value: string | null | undefined) {
@@ -1129,7 +1175,10 @@ function parseAnalysisOptionsJson(value: string | null | undefined) {
     }
     return parsed as Record<string, unknown>;
   } catch (error) {
-    if (error instanceof Error && error.message === "ANALYSIS_OPTIONS_INVALID") {
+    if (
+      error instanceof Error &&
+      error.message === "ANALYSIS_OPTIONS_INVALID"
+    ) {
       throw error;
     }
     throw new Error("ANALYSIS_OPTIONS_JSON_INVALID");
@@ -1156,12 +1205,9 @@ function normalizeAnalysisOptions(
       includeLines: candidate.includeLines !== false,
       includeTransformers: candidate.includeTransformers !== false,
       selectedComponentIds: stringArray(candidate.selectedComponentIds),
-      maximumContingencies: Math.round(finiteNumber(
-        candidate.maximumContingencies,
-        50,
-        1,
-        100,
-      )),
+      maximumContingencies: Math.round(
+        finiteNumber(candidate.maximumContingencies, 50, 1, 100),
+      ),
       minimumVoltagePu,
       maximumVoltagePu: finiteNumber(
         candidate.maximumVoltagePu,
@@ -1218,8 +1264,18 @@ function normalizeAnalysisOptions(
         20,
       ),
       step: finiteNumber(candidate.step, 0.05, 0.001, 10),
-      minimumVoltagePu: finiteNumber(candidate.minimumVoltagePu, 0.95, 0.1, 1.5),
-      maximumVoltagePu: finiteNumber(candidate.maximumVoltagePu, 1.05, 0.1, 1.5),
+      minimumVoltagePu: finiteNumber(
+        candidate.minimumVoltagePu,
+        0.95,
+        0.1,
+        1.5,
+      ),
+      maximumVoltagePu: finiteNumber(
+        candidate.maximumVoltagePu,
+        1.05,
+        0.1,
+        1.5,
+      ),
       maximumLoadingPercent: finiteNumber(
         candidate.maximumLoadingPercent,
         100,
@@ -1232,7 +1288,9 @@ function normalizeAnalysisOptions(
   return {};
 }
 
-function validationFailure(validation: ReturnType<typeof validateElectricalModel>) {
+function validationFailure(
+  validation: ReturnType<typeof validateElectricalModel>,
+) {
   if (!validation.errors.length) return;
   const details = validation.errors
     .slice(0, 8)
@@ -1280,8 +1338,10 @@ function validateAnalysisSpecificModel(
     const includeTransformers = analysisOptions.includeTransformers !== false;
     const candidates = components.filter((component) => {
       if (selected.size && !selected.has(component.id)) return false;
-      return (includeLines && component.kind === "LINE") ||
-        (includeTransformers && component.kind === "TRANSFORMER_2W");
+      return (
+        (includeLines && component.kind === "LINE") ||
+        (includeTransformers && component.kind === "TRANSFORMER_2W")
+      );
     });
     if (!candidates.length) throw new Error("NO_CONTINGENCY_CANDIDATES");
   }
@@ -1295,8 +1355,10 @@ function validateAnalysisSpecificModel(
   }
   if (analysisType === "LOADABILITY") {
     const selected = new Set(stringArray(analysisOptions.selectedComponentIds));
-    const loads = components.filter((component) =>
-      component.kind === "LOAD" && (!selected.size || selected.has(component.id))
+    const loads = components.filter(
+      (component) =>
+        component.kind === "LOAD" &&
+        (!selected.size || selected.has(component.id)),
     );
     if (!loads.length) throw new Error("NO_LOADS_SELECTED");
     const start = Number(analysisOptions.startMultiplier);
@@ -1589,7 +1651,8 @@ async function startAnalysis(
     diagramId: diagram.id,
     operatingCaseId,
     name: String(
-      args.name || `${ANALYSIS_DEFINITIONS[analysisType as keyof typeof ANALYSIS_DEFINITIONS].label} · ${document.name || diagram.name}`,
+      args.name ||
+        `${ANALYSIS_DEFINITIONS[analysisType as keyof typeof ANALYSIS_DEFINITIONS].label} · ${document.name || diagram.name}`,
     )
       .trim()
       .slice(0, 160),
@@ -1609,7 +1672,9 @@ async function startAnalysis(
     inputStorageKey,
     requestedMemoryMb: 3072,
     executionTimeoutSeconds: 840,
-    reservedUnits: ANALYSIS_DEFINITIONS[analysisType as keyof typeof ANALYSIS_DEFINITIONS].units,
+    reservedUnits:
+      ANALYSIS_DEFINITIONS[analysisType as keyof typeof ANALYSIS_DEFINITIONS]
+        .units,
     consumedUnits: 0,
     requestedByProfileId: identity.sub,
     requestedAt,
@@ -1626,8 +1691,9 @@ async function startAnalysis(
 
   if (createResult.errors?.length || !createResult.data) {
     throw new Error(
-      createResult.errors?.map((item: { message?: string | null }) => item.message).join("; ") ||
-        "ANALYSIS_STUDY_CREATE_FAILED",
+      createResult.errors
+        ?.map((item: { message?: string | null }) => item.message)
+        .join("; ") || "ANALYSIS_STUDY_CREATE_FAILED",
     );
   }
 
@@ -1697,7 +1763,8 @@ function artifactKeyForStudy(
   if (!fileName) throw new Error("ANALYSIS_ARTIFACT_NOT_SUPPORTED");
   if (!configured) throw new Error("ANALYSIS_ARTIFACT_NOT_AVAILABLE");
   const expected = `${base}/${fileName}`;
-  if (configured !== expected) throw new Error("ANALYSIS_ARTIFACT_KEY_MISMATCH");
+  if (configured !== expected)
+    throw new Error("ANALYSIS_ARTIFACT_KEY_MISMATCH");
   return { normalized, key: configured };
 }
 
@@ -1708,7 +1775,8 @@ async function requestArtifact(
   const studyId = safeSegment(args.studyId, "study_id");
   const result = await client.models.AnalysisStudy.get({ id: studyId });
   const study = result.data;
-  if (result.errors?.length || !study) throw new Error("ANALYSIS_STUDY_NOT_FOUND");
+  if (result.errors?.length || !study)
+    throw new Error("ANALYSIS_STUDY_NOT_FOUND");
   if (!canReadStudy(study, identity)) throw new Error("FORBIDDEN");
 
   const { normalized, key } = artifactKeyForStudy(study, args.artifactType);
@@ -1740,7 +1808,6 @@ async function requestArtifact(
   };
 }
 
-
 function normalizeResultLayoutJson(layoutJson: string) {
   if (typeof layoutJson !== "string" || layoutJson.length > 100_000) {
     throw new Error("ANALYSIS_LAYOUT_TOO_LARGE");
@@ -1755,10 +1822,12 @@ function normalizeResultLayoutJson(layoutJson: string) {
     throw new Error("ANALYSIS_LAYOUT_INVALID");
   }
   const entries = Object.entries(parsed as Record<string, unknown>);
-  if (entries.length > 1000) throw new Error("ANALYSIS_LAYOUT_ENTRY_LIMIT_EXCEEDED");
+  if (entries.length > 1000)
+    throw new Error("ANALYSIS_LAYOUT_ENTRY_LIMIT_EXCEEDED");
   const normalized: Record<string, { x: number; y: number }> = {};
   for (const [key, value] of entries) {
-    if (!key || key.length > 240 || !value || typeof value !== "object") continue;
+    if (!key || key.length > 240 || !value || typeof value !== "object")
+      continue;
     const x = Number((value as { x?: unknown }).x);
     const y = Number((value as { y?: unknown }).y);
     if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
@@ -1770,15 +1839,14 @@ function normalizeResultLayoutJson(layoutJson: string) {
   return JSON.stringify(normalized);
 }
 
-async function saveResultLayout(
-  args: LayoutArguments,
-  identity: Identity,
-) {
+async function saveResultLayout(args: LayoutArguments, identity: Identity) {
   const studyId = safeSegment(args.studyId, "study_id");
   const result = await client.models.AnalysisStudy.get({ id: studyId });
   const study = result.data;
-  if (result.errors?.length || !study) throw new Error("ANALYSIS_STUDY_NOT_FOUND");
-  if (!canEditStudyLayout(study, identity)) throw new Error("WRITE_ACCESS_REQUIRED");
+  if (result.errors?.length || !study)
+    throw new Error("ANALYSIS_STUDY_NOT_FOUND");
+  if (!canEditStudyLayout(study, identity))
+    throw new Error("WRITE_ACCESS_REQUIRED");
   const layoutJson = normalizeResultLayoutJson(args.layoutJson);
   const update = await client.models.AnalysisStudy.update({
     id: studyId,
@@ -1806,10 +1874,7 @@ export const handler: AppSyncResolverHandler<
 
   switch (runtimeEvent.fieldName) {
     case "startAnalysis":
-      return startAnalysis(
-        event.arguments as StartAnalysisArguments,
-        identity,
-      );
+      return startAnalysis(event.arguments as StartAnalysisArguments, identity);
     case "requestAnalysisArtifact":
       return requestArtifact(event.arguments as ArtifactArguments, identity);
     case "saveAnalysisResultLayout":
