@@ -3,7 +3,7 @@ import { unwrapAmplifyResult } from "../../api/helpers/index.js";
 
 export async function listProjectTemplatesService() {
   const templates = unwrapAmplifyResult(
-    await client.queries.listProjectTemplates({ action: "LIST" }),
+    await client.queries.listPublishedProjectTemplates({ action: "LIST" }),
     "No fue posible cargar los ejemplos.",
   );
   return [...templates].sort((a, b) => {

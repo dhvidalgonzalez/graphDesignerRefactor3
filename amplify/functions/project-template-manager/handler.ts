@@ -179,7 +179,7 @@ function resolveAction(event: RuntimeEvent, fallback?: string | null): TemplateA
   const fieldName = event.info?.fieldName ?? event.fieldName;
   const fieldAction = (() => {
     switch (fieldName) {
-      case "listProjectTemplates":
+      case "listPublishedProjectTemplates":
         return "LIST";
       case "publishProjectTemplate":
         return "PUBLISH";

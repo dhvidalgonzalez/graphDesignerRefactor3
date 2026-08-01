@@ -512,7 +512,7 @@ const schema = a
       contentType: a.string().required(),
     }),
 
-    listProjectTemplates: a
+    listPublishedProjectTemplates: a
       .query()
       .arguments({ action: a.string() })
       .returns(a.ref("ProjectTemplateSummary").array())
