@@ -6,7 +6,6 @@ export default function CreateProjectModal() {
   const { createProjectOpen, actions } = useWorkspace();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [sample, setSample] = useState(false);
   const [multiDiagram, setMultiDiagram] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
@@ -15,7 +14,6 @@ export default function CreateProjectModal() {
     if (!createProjectOpen) return;
     setName("");
     setDescription("");
-    setSample(false);
     setMultiDiagram(false);
     setSubmitting(false);
     setError("");
@@ -26,7 +24,7 @@ export default function CreateProjectModal() {
     setSubmitting(true);
     setError("");
     try {
-      await actions.createProject({ name, description, sample, multiDiagram });
+      await actions.createProject({ name, description, multiDiagram });
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "No se pudo crear el proyecto.");
       setSubmitting(false);
@@ -67,13 +65,6 @@ export default function CreateProjectModal() {
             onChange={(event) => setDescription(event.target.value)}
             placeholder="Alcance, instalación o propósito del proyecto"
           />
-        </label>
-        <label className="project-template-option">
-          <input type="checkbox" checked={sample} disabled={submitting} onChange={(event) => setSample(event.target.checked)} />
-          <span>
-            <strong>Incluir diagrama de demostración</strong>
-            <small>Agrega el circuito de prueba de 220/66 kV. Si no, se crea una hoja vacía.</small>
-          </span>
         </label>
         <label className="project-template-option project-template-option--advanced">
           <input

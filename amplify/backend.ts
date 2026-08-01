@@ -12,6 +12,7 @@ import { projectDiagramSync } from "./functions/project-diagram-sync/resource";
 import { billingManager } from "./functions/billing-manager/resource";
 import { lemonSqueezyWebhook } from "./functions/lemon-squeezy-webhook/resource";
 import { analysisOrchestrator } from "./functions/analysis-orchestrator/resource";
+import { projectTemplateManager } from "./functions/project-template-manager/resource";
 
 export const backend = defineBackend({
   auth,
@@ -24,6 +25,7 @@ export const backend = defineBackend({
   billingManager,
   lemonSqueezyWebhook,
   analysisOrchestrator,
+  projectTemplateManager,
 });
 
 backend.projectInvitation.resources.lambda.addToRolePolicy(

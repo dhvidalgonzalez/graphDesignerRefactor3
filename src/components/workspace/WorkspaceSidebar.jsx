@@ -2,7 +2,7 @@ import Icon from "../common/Icon.jsx";
 import { getInitials } from "../../utils/format.js";
 import { useWorkspace } from "../../workspace/WorkspaceContext.jsx";
 
-export default function WorkspaceSidebar({ selectedProjectId, billing = false }) {
+export default function WorkspaceSidebar({ selectedProjectId, billing = false, examples = false }) {
   const { projectSummaries, profile, session, actions } = useWorkspace();
   const sharedCount = projectSummaries.filter((project) => project.shared).length;
 
@@ -20,13 +20,22 @@ export default function WorkspaceSidebar({ selectedProjectId, billing = false })
       <nav className="workspace-navigation" aria-label="Espacios de trabajo">
         <span className="workspace-nav-label">Espacios de trabajo</span>
         <button
-          className={!selectedProjectId && !billing ? "active" : ""}
+          className={!selectedProjectId && !billing && !examples ? "active" : ""}
           type="button"
           onClick={actions.openWorkspace}
         >
           <Icon name="dashboard" size={16} />
           <span>Mis proyectos</span>
           <strong>{projectSummaries.length}</strong>
+        </button>
+
+        <button
+          className={examples ? "active" : ""}
+          type="button"
+          onClick={actions.openExamples}
+        >
+          <Icon name="spark" size={16} />
+          <span>Ejemplos</span>
         </button>
 
         <span className="workspace-nav-label workspace-nav-label--projects">Proyectos</span>

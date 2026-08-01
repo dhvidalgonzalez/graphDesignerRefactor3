@@ -31,6 +31,9 @@ import acceptInvitationService from "../../services/invitation/accept/index.js";
 import { listMyInvitationsService } from "../../services/invitation/list/index.js";
 import deleteInvitationService from "../../services/invitation/delete/index.js";
 import updateWorkspaceService from "../../services/workspace/update/index.js";
+import listProjectTemplatesService from "../../services/template/list/index.js";
+import publishProjectTemplateService from "../../services/template/publish/index.js";
+import instantiateProjectTemplateService from "../../services/template/instantiate/index.js";
 import localDiagramDraftRepository from "../drafts/localDiagramDraftRepository.js";
 
 function normalizeRole(role) {
@@ -110,6 +113,9 @@ function summaryFromRecord(record, session) {
     updatedAt: record.updatedAt,
     role: roleForProject(record, session),
     shared: record.ownerProfileId !== session.userId,
+    sourceTemplateId: record.sourceTemplateId || null,
+    sourceTemplateName: record.sourceTemplateName || null,
+    publishedTemplateId: record.publishedTemplateId || null,
   };
 }
 
@@ -133,7 +139,7 @@ export class AmplifyProjectRepository {
   async list() {
     const records = await listProjectsService();
     return records
-      .filter((record) => record.status !== "ARCHIVED")
+      .filter((record) => record.status === "ACTIVE")
       .map((record) => summaryFromRecord(record, this.session));
   }
 
@@ -379,6 +385,9 @@ export class AmplifyProjectRepository {
       staleDraft: loaded?.staleDraft ?? false,
       editorRevision: 0,
       remoteUpdateAvailable: null,
+      publishedTemplateId: projectRecord.publishedTemplateId || null,
+      sourceTemplateId: projectRecord.sourceTemplateId || null,
+      sourceTemplateName: projectRecord.sourceTemplateName || null,
       cloudRecord: projectRecord,
     };
   }
@@ -695,6 +704,40 @@ export class AmplifyProjectRepository {
     return true;
   }
 
+
+
+  async listTemplates() {
+    return listProjectTemplatesService();
+  }
+
+  async publishTemplate(project, input) {
+    if (!this.session?.isGlobalAdmin) {
+      throw new Error("Sólo un Global Admin puede publicar ejemplos.");
+    }
+    if (!project?.canManage || project.role !== "owner") {
+      throw new Error("Sólo el propietario del proyecto puede publicarlo como ejemplo.");
+    }
+    return publishProjectTemplateService({
+      sourceProjectId: project.id,
+      templateId: project.publishedTemplateId || null,
+      name: String(input.name || project.name).trim() || project.name,
+      description: String(input.description ?? project.description ?? "").trim(),
+      category: String(input.category || "").trim(),
+      featured: Boolean(input.featured),
+    });
+  }
+
+  async instantiateTemplate(template) {
+    if (!template?.id) throw new Error("No se encontró el ejemplo seleccionado.");
+    const result = await instantiateProjectTemplateService({
+      templateId: template.id,
+      workspaceId: this.workspace.id,
+      projectName: `${template.name} - copia`,
+      clientRequestId: createId("template-copy"),
+    });
+    this.workspace.projectCount = (this.workspace.projectCount ?? 0) + 1;
+    return this.get(result.projectId, { loadDiagramId: result.activeDiagramId });
+  }
 
   async listMyInvitations() {
     const records = await listMyInvitationsService(this.session.email);

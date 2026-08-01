@@ -6,6 +6,7 @@ import WorkspacePage from "../components/workspace/WorkspacePage.jsx";
 import ProjectSettingsModal from "../components/project/ProjectSettingsModal.jsx";
 import InviteMembersModal from "../components/project/InviteMembersModal.jsx";
 import ShareProjectModal from "../components/project/ShareProjectModal.jsx";
+import PublishTemplateModal from "../components/project/PublishTemplateModal.jsx";
 import InvitationAcceptPage from "../components/invitations/InvitationAcceptPage.jsx";
 import BillingPage from "../components/billing/BillingPage.jsx";
 import AuthGate from "../components/auth/AuthGate/index.jsx";
@@ -19,6 +20,7 @@ function parseRoute() {
   const hash = window.location.hash || "#/";
   if (hash === "#/" || hash === "#") return { name: "landing", projectId: null };
   if (hash === "#/workspace") return { name: "workspace", projectId: null };
+  if (hash === "#/workspace/examples") return { name: "examples", projectId: null };
   if (hash.startsWith("#/workspace/billing")) return { name: "billing", projectId: null };
 
   const invitationMatch = hash.match(/^#\/invitations\/([^/?#]+)$/);
@@ -132,6 +134,7 @@ function ProtectedRouter({ route, setRoute }) {
       );
     }
     if (route.name === "workspace") return <WorkspacePage />;
+    if (route.name === "examples") return <WorkspacePage examples />;
     if (route.name === "billing") return <WorkspacePage billing />;
     if (route.name === "invitation") {
       return <InvitationAcceptPage invitationId={route.invitationId} />;
@@ -164,6 +167,7 @@ function ProtectedRouter({ route, setRoute }) {
       <ProjectSettingsModal />
       <InviteMembersModal />
       <ShareProjectModal />
+      <PublishTemplateModal />
     </>
   );
 }

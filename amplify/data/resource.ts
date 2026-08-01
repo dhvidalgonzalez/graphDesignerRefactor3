@@ -6,6 +6,7 @@ import { projectDiagramSync } from "../functions/project-diagram-sync/resource";
 import { billingManager } from "../functions/billing-manager/resource";
 import { lemonSqueezyWebhook } from "../functions/lemon-squeezy-webhook/resource";
 import { analysisOrchestrator } from "../functions/analysis-orchestrator/resource";
+import { projectTemplateManager } from "../functions/project-template-manager/resource";
 
 const schema = a
   .schema({
@@ -20,7 +21,8 @@ const schema = a
       "REVOKED",
     ]),
     EmailDeliveryStatus: a.enum(["PENDING", "SENT", "FAILED"]),
-    ProjectStatus: a.enum(["ACTIVE", "ARCHIVED"]),
+    ProjectStatus: a.enum(["CREATING", "ACTIVE", "FAILED", "ARCHIVED"]),
+    ProjectTemplateStatus: a.enum(["PUBLISHED", "HIDDEN"]),
     DiagramStatus: a.enum(["ACTIVE", "ARCHIVED"]),
     BillingProvider: a.enum(["LEMON_SQUEEZY"]),
     BillingPlanCode: a.enum(["FREE", "BASIC"]),
@@ -181,6 +183,9 @@ const schema = a
         diagramCount: a.integer().default(0),
         memberCount: a.integer().default(1),
         accessVersion: a.integer().default(1),
+        publishedTemplateId: a.id(),
+        sourceTemplateId: a.id(),
+        sourceTemplateName: a.string(),
         diagrams: a.hasMany("Diagram", "projectId"),
         members: a.hasMany("ProjectMember", "projectId"),
         invitations: a.hasMany("ProjectInvitation", "projectId"),
@@ -193,6 +198,24 @@ const schema = a
         allow.ownersDefinedIn("editorIdentities").to(["read"]),
         allow.ownersDefinedIn("viewerIdentities").to(["read"]),
       ]),
+
+    ProjectTemplate: a
+      .model({
+        id: a.id().required(),
+        name: a.string().required(),
+        description: a.string(),
+        category: a.string(),
+        status: a.ref("ProjectTemplateStatus").required(),
+        bundleKey: a.string().required(),
+        sourceProjectId: a.id().required(),
+        createdByIdentity: a.string().required(),
+        updatedByIdentity: a.string().required(),
+        featured: a.boolean().default(false),
+        position: a.integer().default(0),
+        diagramCount: a.integer().default(0),
+        componentCount: a.integer().default(0),
+        multiDiagram: a.boolean().default(false),
+      }),
 
     Diagram: a
       .model({
@@ -392,6 +415,27 @@ const schema = a
         allow.ownersDefinedIn("ownerIdentities").to(["read"]),
       ]),
 
+    ProjectTemplateSummary: a.customType({
+      id: a.id().required(),
+      name: a.string().required(),
+      description: a.string(),
+      category: a.string(),
+      status: a.ref("ProjectTemplateStatus").required(),
+      featured: a.boolean().required(),
+      position: a.integer().required(),
+      diagramCount: a.integer().required(),
+      componentCount: a.integer().required(),
+      multiDiagram: a.boolean().required(),
+      updatedAt: a.datetime(),
+    }),
+
+    ProjectTemplateInstantiationResult: a.customType({
+      projectId: a.id().required(),
+      activeDiagramId: a.id().required(),
+      templateId: a.id().required(),
+      projectName: a.string().required(),
+    }),
+
     BillingChargeSummary: a.customType({
       id: a.id().required(),
       status: a.string().required(),
@@ -466,6 +510,41 @@ const schema = a
       expiresAt: a.datetime().required(),
       contentType: a.string().required(),
     }),
+
+    listProjectTemplates: a
+      .query()
+      .arguments({ action: a.string() })
+      .returns(a.ref("ProjectTemplateSummary").array())
+      .handler(a.handler.function(projectTemplateManager))
+      .authorization((allow) => [allow.authenticated()]),
+
+    publishProjectTemplate: a
+      .mutation()
+      .arguments({
+        action: a.string(),
+        sourceProjectId: a.id().required(),
+        templateId: a.id(),
+        name: a.string().required(),
+        description: a.string(),
+        category: a.string(),
+        featured: a.boolean(),
+      })
+      .returns(a.ref("ProjectTemplateSummary"))
+      .handler(a.handler.function(projectTemplateManager))
+      .authorization((allow) => [allow.authenticated()]),
+
+    instantiateProjectTemplate: a
+      .mutation()
+      .arguments({
+        action: a.string(),
+        templateId: a.id().required(),
+        workspaceId: a.id().required(),
+        projectName: a.string(),
+        clientRequestId: a.string().required(),
+      })
+      .returns(a.ref("ProjectTemplateInstantiationResult"))
+      .handler(a.handler.function(projectTemplateManager))
+      .authorization((allow) => [allow.authenticated()]),
 
     getBillingOverview: a
       .query()
@@ -631,6 +710,7 @@ const schema = a
     allow.resource(billingManager).to(["query", "mutate"]),
     allow.resource(lemonSqueezyWebhook).to(["query", "mutate"]),
     allow.resource(analysisOrchestrator).to(["query", "mutate"]),
+    allow.resource(projectTemplateManager).to(["query", "mutate"]),
   ]);
 
 export type Schema = ClientSchema<typeof schema>;

@@ -16,6 +16,10 @@ function routeToWorkspace() {
   setRoute("#/workspace");
 }
 
+function routeToExamples() {
+  setRoute("#/workspace/examples");
+}
+
 function routeToProject(id) {
   setRoute(`#/workspace/projects/${encodeURIComponent(id)}`);
 }
@@ -46,6 +50,9 @@ export function WorkspaceProvider({ children }) {
     [profile, session, workspace],
   );
   const [projectSummaries, setProjectSummaries] = useState([]);
+  const [projectTemplates, setProjectTemplates] = useState([]);
+  const [templateStatus, setTemplateStatus] = useState("idle");
+  const [templateError, setTemplateError] = useState(null);
   const [myInvitations, setMyInvitations] = useState([]);
   const [activeProject, setActiveProject] = useState(null);
   const [status, setStatus] = useState("loading");
@@ -54,6 +61,7 @@ export function WorkspaceProvider({ children }) {
   const [createProjectOpen, setCreateProjectOpen] = useState(false);
   const [inviteMembersOpen, setInviteMembersOpen] = useState(false);
   const [shareProjectOpen, setShareProjectOpen] = useState(false);
+  const [publishTemplateOpen, setPublishTemplateOpen] = useState(false);
   const [connectionCatalogStatus, setConnectionCatalogStatus] = useState("idle");
   const [connectionCatalogProgress, setConnectionCatalogProgress] = useState(null);
   const [connectionCatalogError, setConnectionCatalogError] = useState(null);
@@ -68,6 +76,23 @@ export function WorkspaceProvider({ children }) {
       console.warn("No fue posible cargar las invitaciones recibidas.", nextError);
       setMyInvitations([]);
       return [];
+    }
+  }, [repository]);
+
+
+  const refreshTemplates = useCallback(async () => {
+    setTemplateStatus("loading");
+    setTemplateError(null);
+    try {
+      const templates = await repository.listTemplates();
+      setProjectTemplates(templates);
+      setTemplateStatus("ready");
+      return templates;
+    } catch (nextError) {
+      const normalized = nextError instanceof Error ? nextError : new Error(String(nextError));
+      setTemplateError(normalized);
+      setTemplateStatus("error");
+      throw normalized;
     }
   }, [repository]);
 
@@ -135,9 +160,37 @@ export function WorkspaceProvider({ children }) {
     setProjectSettingsOpen(false);
     setInviteMembersOpen(false);
     setShareProjectOpen(false);
+    setPublishTemplateOpen(false);
     routeToWorkspace();
     refreshSummaries().catch(() => {});
   }, [refreshSummaries]);
+
+  const openExamples = useCallback(() => {
+    setActiveProject(null);
+    setProjectSettingsOpen(false);
+    setInviteMembersOpen(false);
+    setShareProjectOpen(false);
+    setPublishTemplateOpen(false);
+    routeToExamples();
+    refreshTemplates().catch(() => {});
+  }, [refreshTemplates]);
+
+  const instantiateTemplate = useCallback(async (template) => {
+    setStatus("saving");
+    setError(null);
+    try {
+      const project = await repository.instantiateTemplate(template);
+      setActiveProject(project);
+      await refreshSummaries();
+      routeToProject(project.id);
+      return project;
+    } catch (nextError) {
+      const normalized = nextError instanceof Error ? nextError : new Error(String(nextError));
+      setError(null);
+      setStatus("ready");
+      throw normalized;
+    }
+  }, [refreshSummaries, repository]);
 
   const openProject = useCallback(async (id) => {
     routeToProject(id);
@@ -188,6 +241,7 @@ export function WorkspaceProvider({ children }) {
     setProjectSettingsOpen(false);
     setInviteMembersOpen(false);
     setShareProjectOpen(false);
+    setPublishTemplateOpen(false);
     routeToProject(activeProjectId);
   }, [activeProjectId]);
 
@@ -199,6 +253,7 @@ export function WorkspaceProvider({ children }) {
     setProjectSettingsOpen(false);
     setInviteMembersOpen(false);
     setShareProjectOpen(false);
+    setPublishTemplateOpen(false);
     routeToWorkspace();
     refreshSummaries().catch(() => {});
   }, [refreshSummaries]);
@@ -211,6 +266,7 @@ export function WorkspaceProvider({ children }) {
     setProjectSettingsOpen(false);
     setInviteMembersOpen(false);
     setShareProjectOpen(false);
+    setPublishTemplateOpen(false);
     routeToLanding();
   }, []);
 
@@ -228,6 +284,21 @@ export function WorkspaceProvider({ children }) {
     await refreshSummaries();
     return updatedRecord;
   }, [activeProjectId, refreshSummaries, repository]);
+
+  const publishTemplate = useCallback(async (input) => {
+    if (!activeProject) throw new Error("No se encontró el proyecto activo.");
+    const template = await repository.publishTemplate(activeProject, input);
+    setActiveProject((current) => current?.id === activeProject.id
+      ? {
+          ...current,
+          publishedTemplateId: template.id,
+          cloudRecord: { ...current.cloudRecord, publishedTemplateId: template.id },
+        }
+      : current);
+    setPublishTemplateOpen(false);
+    await refreshTemplates();
+    return template;
+  }, [activeProject, refreshTemplates, repository]);
 
   const refreshProjectConnectionCatalog = useCallback(async ({ force = false } = {}) => {
     if (!activeProject?.multiDiagram) return activeProject;
@@ -578,18 +649,24 @@ export function WorkspaceProvider({ children }) {
   const closeInviteMembers = useCallback(() => setInviteMembersOpen(false), []);
   const openShareProject = useCallback(() => setShareProjectOpen(true), []);
   const closeShareProject = useCallback(() => setShareProjectOpen(false), []);
+  const openPublishTemplate = useCallback(() => setPublishTemplateOpen(true), []);
+  const closePublishTemplate = useCallback(() => setPublishTemplateOpen(false), []);
 
   const actions = useMemo(() => ({
     refreshSummaries,
+    refreshTemplates,
     loadProject,
     createProject,
     openWorkspace,
+    openExamples,
+    instantiateTemplate,
     openProject,
     openProjectEditor,
     returnToProject,
     closeProject,
     goHome,
     updateProject,
+    publishTemplate,
     refreshProjectConnectionCatalog,
     prepareProjectAnalysis,
     saveDraft,
@@ -615,18 +692,24 @@ export function WorkspaceProvider({ children }) {
     closeInviteMembers,
     openShareProject,
     closeShareProject,
+    openPublishTemplate,
+    closePublishTemplate,
     signOut,
   }), [
     refreshSummaries,
+    refreshTemplates,
     loadProject,
     createProject,
     openWorkspace,
+    openExamples,
+    instantiateTemplate,
     openProject,
     openProjectEditor,
     returnToProject,
     closeProject,
     goHome,
     updateProject,
+    publishTemplate,
     refreshProjectConnectionCatalog,
     prepareProjectAnalysis,
     saveDraft,
@@ -652,11 +735,16 @@ export function WorkspaceProvider({ children }) {
     closeInviteMembers,
     openShareProject,
     closeShareProject,
+    openPublishTemplate,
+    closePublishTemplate,
     signOut,
   ]);
 
   const value = useMemo(() => ({
     projectSummaries,
+    projectTemplates,
+    templateStatus,
+    templateError,
     myInvitations,
     activeProject,
     activeDiagram: activeProject?.diagrams.find((sheet) => sheet.id === activeProject.activeDiagramId) ?? null,
@@ -669,12 +757,16 @@ export function WorkspaceProvider({ children }) {
     createProjectOpen,
     inviteMembersOpen,
     shareProjectOpen,
+    publishTemplateOpen,
     connectionCatalogStatus,
     connectionCatalogProgress,
     connectionCatalogError,
     actions,
   }), [
     projectSummaries,
+    projectTemplates,
+    templateStatus,
+    templateError,
     myInvitations,
     activeProject,
     status,
@@ -686,6 +778,7 @@ export function WorkspaceProvider({ children }) {
     createProjectOpen,
     inviteMembersOpen,
     shareProjectOpen,
+    publishTemplateOpen,
     connectionCatalogStatus,
     connectionCatalogProgress,
     connectionCatalogError,

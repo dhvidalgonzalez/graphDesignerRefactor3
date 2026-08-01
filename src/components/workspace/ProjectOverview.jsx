@@ -23,7 +23,7 @@ function DiagramPreview({ sheet }) {
 }
 
 export default function ProjectOverview() {
-  const { activeProject, actions } = useWorkspace();
+  const { activeProject, session, actions } = useWorkspace();
   const [tab, setTab] = useState("diagrams");
 
   useEffect(() => setTab("diagrams"), [activeProject?.id]);
@@ -133,6 +133,21 @@ export default function ProjectOverview() {
             <article><span>Creado</span><strong>{formatDate(activeProject.createdAt)}</strong></article>
             <article><span>Identificador cloud</span><code>{activeProject.id}</code></article>
           </div>
+          {session?.isGlobalAdmin && activeProject.canManage && (
+            <div className="project-template-admin-zone">
+              <span><Icon name="spark" size={20} /></span>
+              <div>
+                <strong>{activeProject.publishedTemplateId ? "Ejemplo publicado" : "Publicar en el catálogo general"}</strong>
+                <p>{activeProject.publishedTemplateId
+                  ? "Puedes reemplazar el ejemplo vigente con el estado actual guardado del proyecto. Las copias existentes permanecerán intactas."
+                  : "Como Global Admin puedes crear un ejemplo oficial a partir de este proyecto sin convertir ni bloquear el proyecto original."}</p>
+                {activeProject.publishedTemplateId && <code>{activeProject.publishedTemplateId}</code>}
+              </div>
+              <button className="button button--primary" type="button" onClick={actions.openPublishTemplate}>
+                {activeProject.publishedTemplateId ? "Actualizar ejemplo" : "Publicar como ejemplo"}
+              </button>
+            </div>
+          )}
           <div className="project-danger-zone">
             <div><strong>Zona de administración</strong><p>Las operaciones sensibles permanecen agrupadas para evitar acciones accidentales.</p></div>
             <button className="button danger-outline" type="button" disabled={!activeProject.canManage} onClick={actions.openProjectSettings}>Administrar proyecto</button>

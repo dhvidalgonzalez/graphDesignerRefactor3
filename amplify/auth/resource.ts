@@ -5,6 +5,7 @@ export const auth = defineAuth({
   loginWith: {
     email: true,
   },
+  groups: ["GLOBAL_ADMIN"],
   userAttributes: {
     givenName: {
       mutable: true,
