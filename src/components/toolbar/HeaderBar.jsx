@@ -41,7 +41,7 @@ export default function HeaderBar() {
   const syncNow = async () => {
     if (!activeProject || !activeDiagram || !activeProject.canEdit) return;
     if (store.getState().persistence.status === "conflict") {
-      throw new Error("Existe una versión más reciente en la nube. Recárgala antes de volver a guardar.");
+      throw new Error("Existe una versión más reciente del diagrama. Recárgala antes de volver a guardar.");
     }
 
     const currentDocument = store.getState().document;
@@ -49,7 +49,7 @@ export default function HeaderBar() {
 
     if (!hasPendingCloudChanges(store.getState().persistence.status)) return;
 
-    editorActions.setPersistence("saving", "Sincronizando con S3…");
+    editorActions.setPersistence("saving", "Guardando cambios…");
 
     try {
       await workspaceActions.saveDiagramDocument(
@@ -57,7 +57,7 @@ export default function HeaderBar() {
         activeDiagram.id,
         currentDocument,
       );
-      editorActions.setPersistence("saved", "Guardado en la nube");
+      editorActions.setPersistence("saved", "Cambios guardados");
     } catch (error) {
       workspaceActions.saveDraft(
         activeProject.id,
@@ -67,7 +67,7 @@ export default function HeaderBar() {
       if (error?.code === "REMOTE_VERSION_CHANGED") {
         editorActions.setPersistence(
           "conflict",
-          "Hay una versión más reciente en la nube",
+          "Hay una versión más reciente del diagrama",
         );
         editorActions.setNotice(
           "Otra persona guardó una versión nueva. Recárgala antes de volver a sincronizar.",
@@ -88,7 +88,7 @@ export default function HeaderBar() {
     const pending = hasPendingCloudChanges(store.getState().persistence.status);
     if (pending) {
       const confirmed = window.confirm(
-        "Hay cambios locales y una versión más reciente en la nube.\n\nAl continuar se descartará el borrador local de esta hoja y se cargará la versión remota.",
+        "Hay cambios locales y una versión más reciente del diagrama.\n\nAl continuar se descartará el borrador local de esta hoja y se cargará la versión guardada.",
       );
       if (!confirmed) return;
     }
@@ -111,12 +111,12 @@ export default function HeaderBar() {
       ) {
         if (store.getState().persistence.status === "conflict") {
           const loadCloud = window.confirm(
-            "Otra persona guardó una versión más reciente.\n\nAceptar: cargar la versión de la nube.\nCancelar: conservar el borrador local y salir sin sobrescribirla.",
+            "Otra persona guardó una versión más reciente.\n\nAceptar: cargar la versión guardada.\nCancelar: conservar el borrador local y salir sin sobrescribirla.",
           );
           if (loadCloud) await reloadRemote();
         } else {
           const shouldSync = window.confirm(
-            "Hay cambios pendientes de sincronización.\n\nAceptar: guardar ahora en la nube.\nCancelar: conservar sólo el borrador local y salir.",
+            "Hay cambios pendientes de sincronización.\n\nAceptar: guardar los cambios ahora.\nCancelar: conservar sólo el borrador local y salir.",
           );
 
           if (shouldSync) {
@@ -269,8 +269,8 @@ export default function HeaderBar() {
           <button
             className={`button analysis-header-button ${rightPanelMode === "analysis" ? "analysis-header-button--active" : "button--ghost"}`}
             type="button"
-            onClick={rightPanelMode === "analysis" ? editorActions.closeAnalysisPanel : editorActions.openAnalysisPanel}
-            title="Preparar parámetros, casos de operación y entrada del análisis"
+            onClick={editorActions.openAnalysisPanel}
+            title="Abrir el centro de análisis y mantener el resumen lateral"
           >
             <Icon name="spark" size={14} /> <span>Análisis</span>
           </button>

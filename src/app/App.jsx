@@ -22,6 +22,7 @@ function parseRoute() {
   if (hash === "#/workspace") return { name: "workspace", projectId: null };
   if (hash === "#/workspace/examples") return { name: "examples", projectId: null };
   if (hash.startsWith("#/workspace/billing")) return { name: "billing", projectId: null };
+  if (hash === "#/workspace/profile") return { name: "profile", projectId: null };
 
   const invitationMatch = hash.match(/^#\/invitations\/([^/?#]+)$/);
   if (invitationMatch) {
@@ -59,7 +60,7 @@ function DiagramEditorInstance({
       );
     } else if (staleDraft) {
       nextStore.actions.setNotice(
-        "Se cargó la versión más reciente de la nube porque el proyecto cambió desde otro dispositivo o usuario.",
+        "Se cargó la versión guardada más reciente porque el proyecto cambió desde otro dispositivo o usuario.",
         "warning",
       );
     }
@@ -123,7 +124,7 @@ function ProtectedRouter({ route, setRoute }) {
       const label = status === "saving"
         ? "Guardando cambios del proyecto…"
         : route.name === "editor"
-          ? "Preparando editor y descargando la hoja…"
+          ? "Preparando el editor y cargando la hoja…"
           : route.name === "project"
             ? "Cargando proyecto…"
             : "Cargando tus espacios de trabajo…";
@@ -136,6 +137,7 @@ function ProtectedRouter({ route, setRoute }) {
     if (route.name === "workspace") return <WorkspacePage />;
     if (route.name === "examples") return <WorkspacePage examples />;
     if (route.name === "billing") return <WorkspacePage billing />;
+    if (route.name === "profile") return <WorkspacePage account />;
     if (route.name === "invitation") {
       return <InvitationAcceptPage invitationId={route.invitationId} />;
     }
@@ -147,7 +149,7 @@ function ProtectedRouter({ route, setRoute }) {
     if (route.name === "editor") {
       return activeProject?.id === route.projectId && activeProject.diagrams.some((item) => item.document)
         ? <ProjectEditorHost />
-        : <div className="workspace-route-loading"><LoadingIndicator label="Preparando editor y descargando la hoja…" /></div>;
+        : <div className="workspace-route-loading"><LoadingIndicator label="Preparando el editor y cargando la hoja…" /></div>;
     }
     return <WorkspacePage />;
   }, [
@@ -172,11 +174,11 @@ function ProtectedRouter({ route, setRoute }) {
   );
 }
 
-function AmplifySetupNotice() {
+function ConfigurationNotice() {
   return (
     <div className="session-state-page session-state-page--error">
-      <strong>Falta generar amplify_outputs.json</strong>
-      <p>Ejecuta <code>npm run sandbox</code> para crear los recursos cloud y conectar la aplicación.</p>
+      <strong>La aplicación todavía no está configurada</strong>
+      <p>Completa la configuración del entorno antes de ingresar al espacio de trabajo.</p>
       <a className="button button--soft" href="#/">Volver al inicio</a>
     </div>
   );
@@ -192,7 +194,7 @@ export default function App() {
   }, []);
 
   if (route.name === "landing") return <LandingPage />;
-  if (!hasAmplifyOutputs()) return <AmplifySetupNotice />;
+  if (!hasAmplifyOutputs()) return <ConfigurationNotice />;
 
   return (
     <AuthGate>

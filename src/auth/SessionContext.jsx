@@ -67,7 +67,7 @@ export function SessionProvider({ authenticatorUser, signOut, children }) {
         <strong>No fue posible preparar la sesión</strong>
         <p>
           {state.error?.message ||
-            "Revisa la configuración de Amplify e inténtalo nuevamente."}
+            "No fue posible completar el acceso. Inténtalo nuevamente."}
         </p>
         <div className="session-state-actions">
           <button

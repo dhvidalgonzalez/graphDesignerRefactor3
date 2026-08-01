@@ -20,7 +20,7 @@ export default function LandingPage() {
       <main className="landing-main">
         <section className="landing-hero" id="inicio">
           <div className="hero-copy">
-            <span className="hero-kicker">Editor unifilar local-first</span>
+            <span className="hero-kicker">Editor unifilar para proyectos eléctricos</span>
             <h1>Diseña, organiza y comunica una red eléctrica.</h1>
             <p>
               Crea proyectos eléctricos con múltiples hojas, símbolos reutilizables, conexiones inteligentes y una base preparada para colaboración.
@@ -72,7 +72,7 @@ export default function LandingPage() {
       </main>
       <footer className="landing-footer">
         <strong>Graph Designer</strong>
-        <span>Prototipo cloud · autenticación, colaboración y documentos versionados</span>
+        <span>Diseño unifilar, organización por proyectos y colaboración segura</span>
       </footer>
     </div>
   );

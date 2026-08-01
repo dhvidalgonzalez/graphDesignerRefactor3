@@ -1,5 +1,6 @@
-import { buildElectricalModel, getElectricalModelStatistics } from "../electrical/electricalModel.js";
+import { getElectricalModelStatistics } from "../electrical/electricalModel.js";
 import { normalizeAnalysisConfiguration } from "./analysisConfiguration.js";
+import { createAnalysisTopologyScope, isAnalysisSlack } from "./analysisTopologyScope.js";
 
 
 const ASSUMPTION_RELEVANT_FIELDS = new Set([
@@ -39,7 +40,10 @@ function buildIslandIndex(model) {
   const electricallyLinks = (component) => {
     if (!component.inService) return false;
     if (["LINE", "TRANSFORMER_2W", "TRANSFORMER_3W"].includes(component.kind)) return true;
-    if (component.kind === "SWITCH") return component.parameters?.state?.value !== "OPEN";
+    if (component.kind === "SWITCH") {
+      if (component.operatingState?.switchClosed !== undefined) return Boolean(component.operatingState.switchClosed);
+      return component.parameters?.state?.value !== "OPEN";
+    }
     return false;
   };
 
@@ -69,6 +73,22 @@ function buildIslandIndex(model) {
   return { islandByNode, terminalsByComponent };
 }
 
+/**
+ * @typedef {{
+ *   code: string,
+ *   message: string,
+ *   componentId?: string,
+ *   field?: string,
+ *   islandId?: string,
+ *   componentIds?: string[],
+ *   connectionNodeIds?: string[],
+ *   diagramId?: string,
+ *   diagramName?: string,
+ *   componentName?: string,
+ * }} AnalysisIssue
+ */
+
+/** @returns {AnalysisIssue} */
 function issue(code, message, componentId = null, field = null) {
   return {
     code,
@@ -87,25 +107,6 @@ function isMissing(component, key) {
   return !parameter || parameter.value === null || parameter.value === "" || parameter.status === "MISSING";
 }
 
-function isPreparedElectricalModel(model) {
-  return Boolean(
-    model
-    && Array.isArray(model.components)
-    && Array.isArray(model.terminals)
-    && Array.isArray(model.connectionNodes),
-  );
-}
-
-function analysisElectricalModel(document) {
-  if (
-    document?.analysisScope === "PROJECT"
-    && isPreparedElectricalModel(document.electricalModel)
-  ) {
-    return structuredClone(document.electricalModel);
-  }
-  return buildElectricalModel(document);
-}
-
 function addIssueContext(items, componentById) {
   return items.map((item) => {
     if (!item.componentId) return item;
@@ -122,12 +123,14 @@ function addIssueContext(items, componentById) {
 }
 
 
-export function evaluateAnalysisReadiness(document) {
-  const model = analysisElectricalModel(document);
+export function evaluateAnalysisReadiness(document, { operatingCaseId = undefined } = {}) {
+  const topologyScope = createAnalysisTopologyScope(document, operatingCaseId);
+  const model = topologyScope.electricalModel;
   const errors = Array.isArray(document?.projectTopologyIssues)
     ? document.projectTopologyIssues.map((item) => ({ ...item }))
     : [];
-  const warnings = [];
+  /** @type {AnalysisIssue[]} */
+  const warnings = topologyScope.warnings.map((item) => ({ ...item }));
   const componentById = new Map(model.components.map((component) => [component.id, component]));
   const connectionNodeById = new Map(model.connectionNodes.map((node) => [node.id, node]));
   const terminalsByComponent = model.terminals.reduce((groups, terminal) => {
@@ -135,50 +138,38 @@ export function evaluateAnalysisReadiness(document) {
     return groups;
   }, new Map());
 
-  const slackComponents = model.components.filter((component) => {
-    if (!component.inService) return false;
-    if (component.kind === "EXTERNAL_GRID") return true;
-    return component.kind === "GENERATOR" && String(parameterValue(component, "controlMode") ?? "").toUpperCase() === "SLACK";
-  });
+  const slackComponents = model.components.filter(isAnalysisSlack);
 
-  if (!slackComponents.length) {
+  if (!topologyScope.hasSlackReference) {
     errors.push(issue(
       "NO_SLACK_REFERENCE",
       "No existe una red externa ni un generador configurado como Slack.",
     ));
-  }
-
-  const { islandByNode, terminalsByComponent: islandTerminalsByComponent } = buildIslandIndex(model);
-  const islandSummary = new Map();
-  model.components.filter((component) => component.inService).forEach((component) => {
-    const nodeIds = [...new Set((islandTerminalsByComponent.get(component.id) ?? [])
-      .map((terminal) => terminal.connectionNodeId)
-      .filter(Boolean))];
-    nodeIds.forEach((nodeId) => {
-      const islandId = islandByNode.get(nodeId);
-      if (!islandId) return;
-      const current = islandSummary.get(islandId) ?? { components: new Set(), slackIds: new Set(), energized: false };
-      current.components.add(component.id);
-      current.energized ||= ["LOAD", "GENERATOR", "EXTERNAL_GRID", "SHUNT"].includes(component.kind);
-      if (slackComponents.some((slack) => slack.id === component.id)) current.slackIds.add(component.id);
-      islandSummary.set(islandId, current);
+  } else {
+    const { islandByNode, terminalsByComponent: islandTerminalsByComponent } = buildIslandIndex(model);
+    const islandSummary = new Map();
+    model.components.filter((component) => component.inService).forEach((component) => {
+      const nodeIds = [...new Set((islandTerminalsByComponent.get(component.id) ?? [])
+        .map((terminal) => terminal.connectionNodeId)
+        .filter(Boolean))];
+      nodeIds.forEach((nodeId) => {
+        const islandId = islandByNode.get(nodeId);
+        if (!islandId) return;
+        const current = islandSummary.get(islandId) ?? { slackIds: new Set() };
+        if (slackComponents.some((slack) => slack.id === component.id)) current.slackIds.add(component.id);
+        islandSummary.set(islandId, current);
+      });
     });
-  });
 
-  islandSummary.forEach((summary, islandId) => {
-    if (summary.energized && !summary.slackIds.size) {
-      errors.push(issue(
-        "ENERGIZED_ISLAND_WITHOUT_REFERENCE",
-        `La isla eléctrica ${islandId} contiene equipos en servicio, pero no posee referencia Slack.`,
-      ));
-    }
-    if (summary.slackIds.size > 1) {
-      warnings.push(issue(
-        "MULTIPLE_SLACK_REFERENCES",
-        `La isla eléctrica ${islandId} contiene ${summary.slackIds.size} referencias Slack; el solver deberá verificar su compatibilidad.`,
-      ));
-    }
-  });
+    islandSummary.forEach((summary, islandId) => {
+      if (summary.slackIds.size > 1) {
+        warnings.push(issue(
+          "MULTIPLE_SLACK_REFERENCES",
+          `La isla eléctrica ${islandId} contiene ${summary.slackIds.size} referencias Slack; el solver deberá verificar su compatibilidad.`,
+        ));
+      }
+    });
+  }
 
   model.connectionNodes.forEach((node) => {
     if (node.voltageConflict) {
@@ -332,7 +323,10 @@ export function evaluateAnalysisReadiness(document) {
     }
   });
 
-  let uniqueWarnings = [...new Map(warnings.map((item) => [`${item.code}:${item.componentId ?? ""}:${item.field ?? ""}`, item])).values()];
+  let uniqueWarnings = [...new Map(warnings.map((item) => [
+    `${item.code}:${item.islandId ?? ""}:${item.componentId ?? ""}:${item.field ?? ""}`,
+    item,
+  ])).values()];
   const validationOptions = normalizeAnalysisConfiguration(document.analysisConfiguration).validationOptions;
   if (!validationOptions.allowAssumedParameters) {
     uniqueWarnings.filter((item) => item.code === "ASSUMED_PARAMETER").forEach((item) => {
@@ -369,11 +363,18 @@ export function evaluateAnalysisReadiness(document) {
     warnings: addIssueContext(uniqueWarnings, componentById),
     statistics: getElectricalModelStatistics({ ...document, electricalModel: model }),
     model,
+    topologyScope: {
+      operatingCaseId: topologyScope.operatingCase.id,
+      slackComponentIds: [...topologyScope.slackComponentIds],
+      includedComponentIds: [...topologyScope.includedComponentIds],
+      excludedComponentIds: [...topologyScope.excludedComponentIds],
+      excludedConnectionNodeIds: [...topologyScope.excludedConnectionNodeIds],
+    },
   };
 }
 
-export function evaluateAnalysisReadinessForType(document, analysisType, options = {}) {
-  const base = evaluateAnalysisReadiness(document);
+export function evaluateAnalysisReadinessForType(document, analysisType, options = {}, context = {}) {
+  const base = evaluateAnalysisReadiness(document, context);
   const errors = [...base.errors];
   const warnings = [...base.warnings];
   const components = base.model.components ?? [];

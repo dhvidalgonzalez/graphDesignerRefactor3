@@ -49,10 +49,13 @@ export function getOperatingCase(document, caseId) {
 
 export function applyOperatingCaseToComponent(component, operatingCase) {
   const override = operatingCase?.overrides?.[component.id] ?? {};
+  const baseInService = component?.operatingState?.inService
+    ?? component?.inService
+    ?? !Boolean(component.parameters?.outOfService?.value);
   return {
     ...component,
     operatingState: {
-      inService: override.inService ?? !Boolean(component.parameters?.outOfService?.value),
+      inService: override.inService ?? Boolean(baseInService),
       ...(override.activePowerKw !== undefined ? { activePowerKw: Number(override.activePowerKw) } : {}),
       ...(override.reactivePowerKvar !== undefined ? { reactivePowerKvar: Number(override.reactivePowerKvar) } : {}),
       ...(override.voltageSetpointPu !== undefined ? { voltageSetpointPu: Number(override.voltageSetpointPu) } : {}),

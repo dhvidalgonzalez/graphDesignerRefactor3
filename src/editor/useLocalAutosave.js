@@ -65,7 +65,7 @@ export function useLocalAutosave() {
       const capturedUpdatedAt = state.document.updatedAt;
 
       try {
-        editorActions.setPersistence("saving", "Guardado automático en S3…");
+        editorActions.setPersistence("saving", "Guardando cambios automáticamente…");
         await workspaceActions.saveDiagramDocument(
           projectId,
           diagramId,
@@ -74,7 +74,7 @@ export function useLocalAutosave() {
 
         const current = store.getState();
         if (current.document.updatedAt === capturedUpdatedAt) {
-          editorActions.setPersistence("saved", "Guardado en la nube");
+          editorActions.setPersistence("saved", "Cambios guardados");
         } else {
           workspaceActions.saveDraft(projectId, diagramId, current.document);
           editorActions.setPersistence(
@@ -91,7 +91,7 @@ export function useLocalAutosave() {
         if (error?.code === "REMOTE_VERSION_CHANGED") {
           editorActions.setPersistence(
             "conflict",
-            "Hay una versión más reciente en la nube",
+            "Hay una versión guardada más reciente",
           );
           editorActions.setNotice(
             "Otra persona guardó una versión nueva. Recárgala antes de volver a sincronizar.",
@@ -141,7 +141,7 @@ export function useLocalAutosave() {
 
         editorActions.setPersistence(
           "conflict",
-          "Hay una versión más reciente en la nube",
+          "Hay una versión guardada más reciente",
         );
         editorActions.setNotice(
           "Otra persona guardó una versión nueva. Sincroniza o recarga antes de continuar.",

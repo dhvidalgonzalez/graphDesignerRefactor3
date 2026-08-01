@@ -199,19 +199,23 @@ export function WorkspaceProvider({ children }) {
 
   const openProjectEditor = useCallback(async (id, diagramId = null) => {
     const targetDiagramId = diagramId || activeProject?.activeDiagramId || null;
-    let project = await repository.get(id, { loadDiagramId: targetDiagramId });
-    if (!project) return null;
-    if (!project.diagrams.some((sheet) => sheet.document)) {
-      throw new Error("No fue posible cargar el documento de la hoja seleccionada.");
-    }
-    setActiveProject(project);
-    routeToEditor(project.id);
+    setStatus("loading-project");
+    setError(null);
+    routeToEditor(id);
+    try {
+      let project = await repository.get(id, { loadDiagramId: targetDiagramId });
+      if (!project) throw new Error("No fue posible encontrar el proyecto solicitado.");
+      if (!project.diagrams.some((sheet) => sheet.document)) {
+        throw new Error("No fue posible cargar el documento de la hoja seleccionada.");
+      }
+      setActiveProject(project);
+      setStatus("ready");
 
-    if (project.multiDiagram) {
-      setConnectionCatalogStatus("loading");
-      setConnectionCatalogError(null);
-      setConnectionCatalogProgress(null);
-      repository.ensureProjectConnectionCatalog(project, {
+      if (project.multiDiagram) {
+        setConnectionCatalogStatus("loading");
+        setConnectionCatalogError(null);
+        setConnectionCatalogProgress(null);
+        repository.ensureProjectConnectionCatalog(project, {
           onProgress: setConnectionCatalogProgress,
         })
         .then((catalogProject) => {
@@ -225,12 +229,18 @@ export function WorkspaceProvider({ children }) {
             catalogError instanceof Error ? catalogError : new Error(String(catalogError)),
           );
         });
-    } else {
-      setConnectionCatalogStatus("idle");
-      setConnectionCatalogProgress(null);
-      setConnectionCatalogError(null);
+      } else {
+        setConnectionCatalogStatus("idle");
+        setConnectionCatalogProgress(null);
+        setConnectionCatalogError(null);
+      }
+      return project;
+    } catch (nextError) {
+      const normalized = nextError instanceof Error ? nextError : new Error(String(nextError));
+      setError(normalized);
+      setStatus("error");
+      throw normalized;
     }
-    return project;
   }, [activeProject?.activeDiagramId, repository]);
 
   const returnToProject = useCallback(() => {

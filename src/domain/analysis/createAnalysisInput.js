@@ -1,21 +1,27 @@
 import { normalizeAnalysisConfiguration } from "./analysisConfiguration.js";
 import { normalizeAnalysisOptions } from "./analysisRegistry.js";
-import { evaluateAnalysisReadiness, evaluateAnalysisReadinessForType } from "./analysisReadiness.js";
-import { applyOperatingCaseToComponent, getOperatingCase, normalizeOperatingCases } from "./operatingCases.js";
+import { evaluateAnalysisReadinessForType } from "./analysisReadiness.js";
+import { getOperatingCase, normalizeOperatingCases } from "./operatingCases.js";
 
-function modelForCase(validation, operatingCase) {
+function validationSnapshot(validation) {
   return {
-    ...validation.model,
-    components: validation.model.components.map((component) => applyOperatingCaseToComponent(component, operatingCase)),
+    readiness: validation.readiness,
+    errors: validation.errors,
+    warnings: validation.warnings,
+    statistics: validation.statistics,
   };
+}
+
+function scopeSnapshot(validation) {
+  return structuredClone(validation.topologyScope ?? {});
 }
 
 export function createAnalysisRequestPreview(document, {
   diagramId = document.id,
-  operatingCaseId,
-  analysisType,
-  analysisOptions,
-  executionPreference,
+  operatingCaseId = undefined,
+  analysisType = undefined,
+  analysisOptions = undefined,
+  executionPreference = undefined,
   expectedDiagramVersion = "<storageVersion>",
   clientRequestId = "<clientRequestId>",
 } = {}) {
@@ -37,15 +43,20 @@ export function createAnalysisInputPreview(document, {
   studyId = "<studyId>",
   diagramId = document.id,
   diagramStorageVersion = "<storageVersion>",
-  operatingCaseId,
-  analysisType,
-  analysisOptions,
+  operatingCaseId = undefined,
+  analysisType = undefined,
+  analysisOptions = undefined,
 } = {}) {
   const configuration = normalizeAnalysisConfiguration(document.analysisConfiguration);
   const selectedType = analysisType ?? configuration.defaultAnalysisType;
   const options = normalizeAnalysisOptions(selectedType, analysisOptions);
-  const validation = evaluateAnalysisReadinessForType(document, selectedType, options);
   const operatingCase = getOperatingCase(document, operatingCaseId);
+  const validation = evaluateAnalysisReadinessForType(
+    document,
+    selectedType,
+    options,
+    { operatingCaseId: operatingCase.id },
+  );
   const input = {
     schemaVersion: 2,
     studyId,
@@ -55,13 +66,9 @@ export function createAnalysisInputPreview(document, {
     analysisType: selectedType,
     solverOptions: structuredClone(configuration.solverOptions),
     analysisOptions: options,
-    validation: {
-      readiness: validation.readiness,
-      errors: validation.errors,
-      warnings: validation.warnings,
-      statistics: validation.statistics,
-    },
-    electricalModel: modelForCase(validation, operatingCase),
+    validation: validationSnapshot(validation),
+    networkScope: scopeSnapshot(validation),
+    electricalModel: structuredClone(validation.model),
   };
 
   if (selectedType === "OPERATING_CASE_SWEEP") {
@@ -69,17 +76,18 @@ export function createAnalysisInputPreview(document, {
     const selected = new Set(options.caseIds);
     const targets = selected.size ? cases.filter((item) => selected.has(item.id)) : cases;
     input.scenarios = targets.map((item) => {
-      const caseValidation = evaluateAnalysisReadiness(document);
+      const scenarioValidation = evaluateAnalysisReadinessForType(
+        document,
+        selectedType,
+        options,
+        { operatingCaseId: item.id },
+      );
       return {
         operatingCaseId: item.id,
         name: item.name,
-        validation: {
-          readiness: caseValidation.readiness,
-          errors: caseValidation.errors,
-          warnings: caseValidation.warnings,
-          statistics: caseValidation.statistics,
-        },
-        electricalModel: modelForCase(caseValidation, item),
+        validation: validationSnapshot(scenarioValidation),
+        networkScope: scopeSnapshot(scenarioValidation),
+        electricalModel: structuredClone(scenarioValidation.model),
       };
     });
   }

@@ -735,14 +735,14 @@ function safeSegment(value: string, field: string) {
 }
 
 async function bodyToString(body: unknown) {
-  if (!body) throw new Error("EMPTY_S3_OBJECT");
+  if (!body) throw new Error("EMPTY_STORAGE_OBJECT");
   const candidate = body as {
     transformToString?: (encoding?: string) => Promise<string>;
   };
   if (typeof candidate.transformToString === "function") {
     return candidate.transformToString("utf-8");
   }
-  throw new Error("UNSUPPORTED_S3_BODY");
+  throw new Error("UNSUPPORTED_STORAGE_BODY");
 }
 
 function parameterValue(component: ElectricalComponent, key: string) {
@@ -755,6 +755,203 @@ function isComponentInService(component: ElectricalComponent) {
   }
   if (component.inService !== undefined) return Boolean(component.inService);
   return !Boolean(parameterValue(component, "outOfService"));
+}
+
+function isSlackComponent(component: ElectricalComponent) {
+  if (!isComponentInService(component)) return false;
+  if (component.kind === "EXTERNAL_GRID") return true;
+  if (component.kind !== "GENERATOR") return false;
+  const controlMode = String(parameterValue(component, "controlMode") || "").toUpperCase();
+  const sourceType = String(parameterValue(component, "sourceType") || "").toUpperCase();
+  return controlMode === "SLACK" || sourceType === "EXTERNAL_GRID";
+}
+
+function isSwitchClosed(component: ElectricalComponent) {
+  if (!isComponentInService(component)) return false;
+  if (component.operatingState?.switchClosed !== undefined) {
+    return Boolean(component.operatingState.switchClosed);
+  }
+  return String(parameterValue(component, "state") || "CLOSED").toUpperCase() !== "OPEN";
+}
+
+function isConductingComponent(component: ElectricalComponent) {
+  if (!isComponentInService(component)) return false;
+  if (new Set(["LINE", "TRANSFORMER_2W", "TRANSFORMER_3W"]).has(component.kind)) {
+    return true;
+  }
+  return component.kind === "SWITCH" && isSwitchClosed(component);
+}
+
+type ValidationIssue = {
+  code: string;
+  message: string;
+  componentId?: string;
+  islandId?: string;
+  componentIds?: string[];
+  connectionNodeIds?: string[];
+};
+
+type ElectricalModelScope = {
+  electricalModel: {
+    schemaVersion: number;
+    components: ElectricalComponent[];
+    terminals: ElectricalTerminal[];
+    connectionNodes: ConnectionNode[];
+  };
+  warnings: ValidationIssue[];
+  networkScope: {
+    slackComponentIds: string[];
+    includedComponentIds: string[];
+    excludedComponentIds: string[];
+    excludedConnectionNodeIds: string[];
+  };
+};
+
+function scopeElectricalModelToSlack(
+  components: ElectricalComponent[],
+  terminals: ElectricalTerminal[],
+  connectionNodes: ConnectionNode[],
+  schemaVersion = 1,
+): ElectricalModelScope {
+  const nodeIds = new Set(connectionNodes.map((node) => node.id));
+  const terminalsByComponent = terminals.reduce((groups, terminal) => {
+    groups.set(terminal.componentId, [
+      ...(groups.get(terminal.componentId) ?? []),
+      terminal,
+    ]);
+    return groups;
+  }, new Map<string, ElectricalTerminal[]>());
+  const componentNodeIds = (component: ElectricalComponent) => [
+    ...new Set(
+      (terminalsByComponent.get(component.id) ?? [])
+        .map((terminal) => terminal.connectionNodeId)
+        .filter((value): value is string => Boolean(value) && nodeIds.has(String(value))),
+    ),
+  ];
+  const adjacency = new Map(
+    connectionNodes.map((node) => [node.id, new Set<string>()]),
+  );
+
+  components.filter(isConductingComponent).forEach((component) => {
+    const ids = componentNodeIds(component);
+    ids.forEach((from) => ids.forEach((to) => {
+      if (from !== to) adjacency.get(from)?.add(to);
+    }));
+  });
+
+  const slackComponents = components.filter(isSlackComponent);
+  const slackNodeIds = new Set(
+    slackComponents.flatMap((component) => componentNodeIds(component)),
+  );
+  const reachableNodeIds = new Set<string>();
+  const pending = [...slackNodeIds];
+  while (pending.length) {
+    const current = pending.pop();
+    if (!current || reachableNodeIds.has(current)) continue;
+    reachableNodeIds.add(current);
+    adjacency.get(current)?.forEach((next) => pending.push(next));
+  }
+
+  const includedComponentIds = new Set(
+    components
+      .filter((component) => {
+        if (!isComponentInService(component)) return false;
+        const ids = componentNodeIds(component);
+        if (!ids.length) return false;
+        if (
+          new Set(["LINE", "TRANSFORMER_2W", "TRANSFORMER_3W", "SWITCH"]).has(
+            component.kind,
+          )
+        ) {
+          return ids.every((id) => reachableNodeIds.has(id));
+        }
+        return ids.some((id) => reachableNodeIds.has(id));
+      })
+      .map((component) => component.id),
+  );
+  const excludedComponentIds = components
+    .filter((component) => !includedComponentIds.has(component.id))
+    .map((component) => component.id)
+    .sort();
+  const excludedConnectionNodeIds = connectionNodes
+    .filter((node) => !reachableNodeIds.has(node.id))
+    .map((node) => node.id)
+    .sort();
+
+  const islandByNode = new Map<string, string>();
+  const islandSummaries = new Map<
+    string,
+    {
+      componentIds: Set<string>;
+      slackIds: Set<string>;
+      connectionNodeIds: Set<string>;
+    }
+  >();
+  connectionNodes.forEach((node) => {
+    if (islandByNode.has(node.id)) return;
+    const islandId = `island-${islandSummaries.size + 1}`;
+    const islandPending = [node.id];
+    const summary = {
+      componentIds: new Set<string>(),
+      slackIds: new Set<string>(),
+      connectionNodeIds: new Set<string>(),
+    };
+    while (islandPending.length) {
+      const current = islandPending.pop();
+      if (!current || islandByNode.has(current)) continue;
+      islandByNode.set(current, islandId);
+      summary.connectionNodeIds.add(current);
+      adjacency.get(current)?.forEach((next) => islandPending.push(next));
+    }
+    islandSummaries.set(islandId, summary);
+  });
+  components.filter(isComponentInService).forEach((component) => {
+    componentNodeIds(component).forEach((nodeId) => {
+      const islandId = islandByNode.get(nodeId);
+      const summary = islandId ? islandSummaries.get(islandId) : null;
+      if (!summary) return;
+      summary.componentIds.add(component.id);
+      if (isSlackComponent(component)) summary.slackIds.add(component.id);
+    });
+  });
+  const warnings = [...islandSummaries.entries()]
+    .filter(([, summary]) => summary.componentIds.size && !summary.slackIds.size)
+    .map(([islandId, summary]): ValidationIssue => ({
+      ...createIssue(
+        "ISLAND_EXCLUDED_FROM_ANALYSIS",
+        `La ${islandId} no posee referencia Slack y será excluida del estudio (${summary.componentIds.size} componente(s)).`,
+      ),
+      islandId,
+      componentIds: [...summary.componentIds].sort(),
+      connectionNodeIds: [...summary.connectionNodeIds].sort(),
+    }));
+
+  const useScopedModel = slackNodeIds.size > 0;
+  return {
+    electricalModel: {
+      schemaVersion,
+      components: useScopedModel
+        ? components.filter((component) => includedComponentIds.has(component.id))
+        : components,
+      terminals: useScopedModel
+        ? terminals.filter((terminal) => (
+            includedComponentIds.has(terminal.componentId)
+            && Boolean(terminal.connectionNodeId)
+            && reachableNodeIds.has(String(terminal.connectionNodeId))
+          ))
+        : terminals,
+      connectionNodes: useScopedModel
+        ? connectionNodes.filter((node) => reachableNodeIds.has(node.id))
+        : connectionNodes,
+    },
+    warnings,
+    networkScope: {
+      slackComponentIds: slackComponents.map((component) => component.id).sort(),
+      includedComponentIds: [...includedComponentIds].sort(),
+      excludedComponentIds,
+      excludedConnectionNodeIds,
+    },
+  };
 }
 
 function normalizeCases(candidate: OperatingCase[] | undefined) {
@@ -793,7 +990,10 @@ function applyOperatingCase(
   operatingCase: OperatingCase,
 ) {
   const override = operatingCase.overrides?.[component.id] ?? {};
-  const baseInService = !Boolean(parameterValue(component, "outOfService"));
+  const baseInService =
+    component.operatingState?.inService ??
+    component.inService ??
+    !Boolean(parameterValue(component, "outOfService"));
   return {
     ...component,
     operatingState: {
@@ -820,7 +1020,11 @@ function applyOperatingCase(
   };
 }
 
-function createIssue(code: string, message: string, componentId?: string) {
+function createIssue(
+  code: string,
+  message: string,
+  componentId?: string,
+): ValidationIssue {
   return {
     code,
     message,
@@ -934,14 +1138,7 @@ function validateElectricalModel(
     }
   });
 
-  const slackComponents = activeComponents.filter((component) => {
-    if (component.kind === "EXTERNAL_GRID") return true;
-    return (
-      component.kind === "GENERATOR" &&
-      String(parameterValue(component, "controlMode") || "").toUpperCase() ===
-        "SLACK"
-    );
-  });
+  const slackComponents = activeComponents.filter(isSlackComponent);
 
   if (!slackComponents.length) {
     errors.push(
@@ -975,10 +1172,7 @@ function validateElectricalModel(
       return true;
     }
     if (component.kind === "SWITCH") {
-      return (
-        String(parameterValue(component, "state") || "CLOSED").toUpperCase() !==
-        "OPEN"
-      );
+      return isSwitchClosed(component);
     }
     return false;
   };
@@ -1047,10 +1241,10 @@ function validateElectricalModel(
 
   islandSummary.forEach((summary, islandId) => {
     if (summary.energized && summary.slackIds.size === 0) {
-      errors.push(
+      warnings.push(
         createIssue(
-          "ENERGIZED_ISLAND_WITHOUT_REFERENCE",
-          `La isla eléctrica ${islandId} contiene equipos en servicio, pero no posee referencia Slack.`,
+          "ISLAND_EXCLUDED_FROM_ANALYSIS",
+          `La isla eléctrica ${islandId} no posee referencia Slack y será excluida del estudio.`,
         ),
       );
     }
@@ -1345,19 +1539,33 @@ function modelForOperatingCase(
   const appliedComponents = components.map((component) =>
     applyOperatingCase(component, operatingCase),
   );
-  const validation = validateElectricalModel(
+  const scoped = scopeElectricalModelToSlack(
     appliedComponents,
     terminals,
     connectionNodes,
+    Number(document.electricalModel?.schemaVersion) || 1,
   );
+  const validation = validateElectricalModel(
+    scoped.electricalModel.components,
+    scoped.electricalModel.terminals,
+    scoped.electricalModel.connectionNodes,
+  );
+  const combinedValidation = {
+    ...validation,
+    warnings: [...scoped.warnings, ...validation.warnings],
+    readiness: validation.errors.length
+      ? "NOT_READY"
+      : scoped.warnings.length || validation.warnings.length
+        ? "READY_WITH_ASSUMPTIONS"
+        : "READY",
+  };
   return {
-    validation: addValidationIssueContext(validation, appliedComponents),
-    electricalModel: {
-      schemaVersion: Number(document.electricalModel?.schemaVersion) || 1,
-      components: appliedComponents,
-      terminals,
-      connectionNodes,
-    },
+    validation: addValidationIssueContext(
+      combinedValidation,
+      scoped.electricalModel.components,
+    ),
+    electricalModel: scoped.electricalModel,
+    networkScope: scoped.networkScope,
   };
 }
 
@@ -1459,6 +1667,7 @@ function buildAnalysisInput(
     ),
     analysisOptions: options.analysisOptions,
     validation: base.validation,
+    networkScope: base.networkScope,
     electricalModel: base.electricalModel,
   };
 
@@ -1474,6 +1683,7 @@ function buildAnalysisInput(
         operatingCaseId: item.id,
         name: item.name || item.id,
         validation: scenario.validation,
+        networkScope: scenario.networkScope,
         electricalModel: scenario.electricalModel,
       };
     });

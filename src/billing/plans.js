@@ -60,8 +60,8 @@ export const PLAN_DEFINITIONS = Object.freeze({
       "Historial de cobros",
       "Administración de suscripción",
       "Preparación de estudios eléctricos",
-      "20 unidades de análisis mensuales (habilitación serverless en fase 2)",
-      "Sincronización manual con el proveedor",
+      "20 unidades de análisis mensuales",
+      "Gestión y actualización de la suscripción",
     ],
   },
 });

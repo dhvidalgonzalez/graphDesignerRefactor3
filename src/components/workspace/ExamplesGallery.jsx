@@ -68,7 +68,7 @@ export default function ExamplesGallery() {
         <span><Icon name="spark" size={20} /></span>
         <div>
           <strong>Los ejemplos originales nunca se modifican</strong>
-          <p>La copia recibe nuevos identificadores, nuevos documentos en S3 y tu usuario queda como propietario. Puedes editarla, compartirla o eliminarla sin afectar el catálogo.</p>
+          <p>La copia se crea como un proyecto completamente independiente y queda bajo tu control. Puedes editarla, compartirla o eliminarla sin afectar el catálogo.</p>
         </div>
       </section>
 
@@ -128,7 +128,7 @@ export default function ExamplesGallery() {
           <div className="workspace-empty-state">
             <span><Icon name={projectTemplates.length ? "search" : "spark"} size={26} /></span>
             <h3>{projectTemplates.length ? "No encontramos ejemplos" : "Todavía no hay ejemplos publicados"}</h3>
-            <p>{projectTemplates.length ? "Prueba con otra búsqueda." : "Un Global Admin puede publicar un proyecto desde la sección de configuración del proyecto."}</p>
+            <p>{projectTemplates.length ? "Prueba con otra búsqueda." : "Los administradores pueden publicar proyectos preparados desde la sección de configuración."}</p>
           </div>
         )}
       </section>

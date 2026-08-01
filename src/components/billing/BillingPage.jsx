@@ -141,7 +141,7 @@ export default function BillingPage() {
       )}
 
       <section className="billing-history-panel">
-        <div className="billing-section-title"><div><h2>Historial de cobros</h2><p>Facturas sincronizadas desde el proveedor de pagos.</p></div><span>{overview?.charges?.length || 0} registros</span></div>
+        <div className="billing-section-title"><div><h2>Historial de cobros</h2><p>Registro de cobros y documentos asociados a tu suscripción.</p></div><span>{overview?.charges?.length || 0} registros</span></div>
         {overview?.charges?.length ? (
           <div className="billing-table-wrap">
             <table className="billing-table">

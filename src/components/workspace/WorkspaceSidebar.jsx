@@ -1,9 +1,11 @@
 import Icon from "../common/Icon.jsx";
 import { getInitials } from "../../utils/format.js";
+import { useSecurity } from "../../auth/SecurityContext.jsx";
 import { useWorkspace } from "../../workspace/WorkspaceContext.jsx";
 
-export default function WorkspaceSidebar({ selectedProjectId, billing = false, examples = false }) {
+export default function WorkspaceSidebar({ selectedProjectId, billing = false, examples = false, account = false }) {
   const { projectSummaries, profile, session, actions } = useWorkspace();
+  const security = useSecurity();
   const sharedCount = projectSummaries.filter((project) => project.shared).length;
 
   return (
@@ -20,7 +22,7 @@ export default function WorkspaceSidebar({ selectedProjectId, billing = false, e
       <nav className="workspace-navigation" aria-label="Espacios de trabajo">
         <span className="workspace-nav-label">Espacios de trabajo</span>
         <button
-          className={!selectedProjectId && !billing && !examples ? "active" : ""}
+          className={!selectedProjectId && !billing && !examples && !account ? "active" : ""}
           type="button"
           onClick={actions.openWorkspace}
         >
@@ -29,11 +31,7 @@ export default function WorkspaceSidebar({ selectedProjectId, billing = false, e
           <strong>{projectSummaries.length}</strong>
         </button>
 
-        <button
-          className={examples ? "active" : ""}
-          type="button"
-          onClick={actions.openExamples}
-        >
+        <button className={examples ? "active" : ""} type="button" onClick={actions.openExamples}>
           <Icon name="spark" size={16} />
           <span>Ejemplos</span>
         </button>
@@ -63,6 +61,14 @@ export default function WorkspaceSidebar({ selectedProjectId, billing = false, e
 
         <span className="workspace-nav-label workspace-nav-label--projects">Cuenta</span>
         <button
+          className={account ? "active" : ""}
+          type="button"
+          onClick={() => { window.location.hash = "#/workspace/profile"; }}
+        >
+          <Icon name="users" size={16} />
+          <span>Mi perfil</span>
+        </button>
+        <button
           className={billing ? "active" : ""}
           type="button"
           onClick={() => { window.location.hash = "#/workspace/billing"; }}
@@ -70,10 +76,24 @@ export default function WorkspaceSidebar({ selectedProjectId, billing = false, e
           <Icon name="settings" size={16} />
           <span>Planes y facturación</span>
         </button>
+
+        {security.status !== "loading" && !security.totpEnabled && (
+          <button className="workspace-security-notice" type="button" onClick={security.openSetup}>
+            <Icon name="shield" size={16} />
+            <span><strong>Protege tu cuenta</strong><small>Activa la verificación en dos pasos</small></span>
+          </button>
+        )}
       </nav>
 
       <div className="workspace-sidebar-footer">
-        <div className="workspace-user-avatar">{getInitials(profile?.displayName || session?.email || "U")}</div>
+        <button
+          className="workspace-user-avatar"
+          type="button"
+          title="Abrir mi perfil"
+          onClick={() => { window.location.hash = "#/workspace/profile"; }}
+        >
+          {getInitials(profile?.displayName || session?.email || "U")}
+        </button>
         <span><strong>{profile?.displayName || "Usuario"}</strong><small>{session?.email}</small></span>
         <button type="button" title="Cerrar sesión" onClick={actions.signOut}><Icon name="external" size={16} /></button>
       </div>

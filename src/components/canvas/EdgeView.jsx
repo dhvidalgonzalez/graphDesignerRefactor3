@@ -5,7 +5,7 @@ import { getVoltageColor } from "../../domain/catalog/symbolCatalog.js";
 import { getEndpointVoltageLevelId } from "../../domain/electrical/topology.js";
 import { createAnalysisResultIndex, loadingColor } from "../../domain/analysis/analysisResults.js";
 
-export default function EdgeView({ edgeId }) {
+export default function EdgeView({ edgeId, deenergized = false }) {
   const data = useEditorSelector((state) => ({
     edge: state.document.edges[edgeId],
     document: state.document,
@@ -24,14 +24,14 @@ export default function EdgeView({ edgeId }) {
   const path = getEdgePoints(data.document, edge);
   const flatPoints = path.flatMap((point) => [point.x, point.y]);
   const levelId = edge.properties.voltageLevelId ?? getEndpointVoltageLevelId(data.document, edge.source);
-  const color = getVoltageColor(data.document.metadata, levelId, edge.properties.outOfService);
+  const color = getVoltageColor(data.document.metadata, levelId, Boolean(edge.properties.outOfService || deenergized));
   const isLine = edge.kind === "line";
   const middle = isLine ? getEdgeMiddlePoint(data.document, edge) : null;
   const resultIndex = data.analysisOverlay?.result
     ? createAnalysisResultIndex(data.document, data.analysisOverlay.result, data.analysisOverlay.viewId)
     : null;
   const branchResult = resultIndex?.branchByComponentId.get(edge.id) ?? null;
-  const resultColor = branchResult && data.analysisOverlay?.options?.visible && data.analysisOverlay?.options?.colorBranchesByLoading
+  const resultColor = !deenergized && branchResult && data.analysisOverlay?.options?.visible && data.analysisOverlay?.options?.colorBranchesByLoading
     ? loadingColor(branchResult.loadingPercent, branchResult.status)
     : color;
   const stroke = data.selected ? "#2563eb" : resultColor;
@@ -54,8 +54,9 @@ export default function EdgeView({ edgeId }) {
         strokeWidth={(data.selected ? (isLine ? 2.5 : 2) : (isLine ? 1.9 : 1.15)) / Math.sqrt(data.scale)}
         lineCap="round"
         lineJoin="round"
-        dash={edge.properties.outOfService ? [3, 2] : undefined}
+        dash={edge.properties.outOfService || deenergized ? [3, 2] : undefined}
         hitStrokeWidth={9 / data.scale}
+        opacity={deenergized && !data.selected ? 0.58 : 1}
         onClick={handleClick}
         onTap={handleClick}
       />
@@ -68,7 +69,7 @@ export default function EdgeView({ edgeId }) {
           align="center"
           text={`${edge.properties.name || "Línea"}${Number(edge.properties.lengthKm) > 0 ? ` · ${edge.properties.lengthKm} km` : ""}`}
           fontSize={2.8}
-          fill={data.selected ? "#1d4ed8" : "#475569"}
+          fill={data.selected ? "#1d4ed8" : deenergized ? "#94a3b8" : "#475569"}
           padding={1}
           listening={false}
         />

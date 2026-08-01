@@ -2,6 +2,7 @@ import { Arrow, Group, Rect, Text } from "react-konva";
 import { useMemo } from "react";
 import { shallowEqual, useEditorActions, useEditorSelector } from "../../editor/EditorContext.jsx";
 import { getEdgePoints } from "../../domain/diagram/edgeGeometry.js";
+import { getDiagramEnergizationState } from "../../domain/analysis/analysisTopologyScope.js";
 import {
   analysisEntityBelongsToDiagram,
   branchFlowArrowSegment,
@@ -114,10 +115,11 @@ function branchTitle(document, branch) {
   return document.edges?.[localId]?.properties?.name || localId || "Línea";
 }
 
-export default function AnalysisOverlayLayer() {
+export default function AnalysisOverlayLayer({ energization: providedEnergization = null }) {
   const data = useEditorSelector((state) => ({
     document: state.document,
     overlay: state.ui.analysisOverlay,
+    operatingCaseId: state.ui.analysisOperatingCaseId,
     scale: state.viewport.scale,
   }), shallowEqual);
   const actions = useEditorActions();
@@ -132,6 +134,10 @@ export default function AnalysisOverlayLayer() {
     () => (rawResult ? createAnalysisResultIndex(data.document, rawResult, viewId) : null),
     [data.document, rawResult, viewId],
   );
+  const energization = useMemo(
+    () => providedEnergization ?? getDiagramEnergizationState(data.document, data.operatingCaseId),
+    [data.document, data.operatingCaseId, providedEnergization],
+  );
 
   if (!rawResult || !result || !options.visible || !index) return null;
 
@@ -144,7 +150,7 @@ export default function AnalysisOverlayLayer() {
   );
   const labelId = (kind, localId) => `${kind}:${multiDiagramResult ? `${data.document.id}:` : ""}${localId}`;
   const visibleBusResults = Object.values(data.document.nodes ?? {})
-    .filter((node) => node.type === "ElmTerm")
+    .filter((node) => node.type === "ElmTerm" && !energization.deenergizedNodeIds.has(node.id))
     .map((node) => ({ node, bus: getBusResultForNode(index, node.id) }))
     .filter((item) => Boolean(item.bus));
 
@@ -154,7 +160,7 @@ export default function AnalysisOverlayLayer() {
         if (!analysisEntityBelongsToDiagram(branch.componentId, data.document.id)) return null;
         const localComponentId = localAnalysisEntityId(branch.componentId, data.document.id);
         const edge = data.document.edges?.[localComponentId];
-        if (!edge || branch.direction === "NONE") return null;
+        if (!edge || energization.deenergizedEdgeIds.has(localComponentId) || branch.direction === "NONE") return null;
         const segment = branchFlowArrowSegment(getEdgePoints(data.document, edge), branch.direction);
         if (!segment) return null;
         const color = loadingColor(branch.loadingPercent, branch.status);
@@ -199,6 +205,7 @@ export default function AnalysisOverlayLayer() {
       {result.branches.map((branch) => {
         if (!analysisEntityBelongsToDiagram(branch.componentId, data.document.id)) return null;
         const localComponentId = localAnalysisEntityId(branch.componentId, data.document.id);
+        if (energization.deenergizedEdgeIds.has(localComponentId)) return null;
         const position = getBranchPosition(data.document, localComponentId);
         if (!position) return null;
         const id = labelId("branch", localComponentId);
@@ -228,6 +235,7 @@ export default function AnalysisOverlayLayer() {
       {result.generators.map((generator) => {
         if (!analysisEntityBelongsToDiagram(generator.componentId, data.document.id)) return null;
         const localComponentId = localAnalysisEntityId(generator.componentId, data.document.id);
+        if (energization.deenergizedNodeIds.has(localComponentId)) return null;
         const position = getEquipmentPosition(data.document, localComponentId);
         if (!position) return null;
         const id = labelId("generator", localComponentId);
@@ -252,6 +260,7 @@ export default function AnalysisOverlayLayer() {
       {result.loads.map((load) => {
         if (!analysisEntityBelongsToDiagram(load.componentId, data.document.id)) return null;
         const localComponentId = localAnalysisEntityId(load.componentId, data.document.id);
+        if (energization.deenergizedNodeIds.has(localComponentId)) return null;
         const position = getEquipmentPosition(data.document, localComponentId);
         if (!position) return null;
         const id = labelId("load", localComponentId);
@@ -276,6 +285,7 @@ export default function AnalysisOverlayLayer() {
       {result.transformers.map((transformer) => {
         if (!analysisEntityBelongsToDiagram(transformer.componentId, data.document.id)) return null;
         const localComponentId = localAnalysisEntityId(transformer.componentId, data.document.id);
+        if (energization.deenergizedNodeIds.has(localComponentId)) return null;
         const position = getEquipmentPosition(data.document, localComponentId);
         if (!position) return null;
         const id = labelId("transformer", localComponentId);

@@ -6,7 +6,7 @@ import { createAnalysisResultIndex, getBusResultForNode, voltagePuColor } from "
 
 const DRAW_TOOLS = new Set(["path", "line"]);
 
-export default function NodeView({ nodeId }) {
+export default function NodeView({ nodeId, deenergized = false }) {
   const data = useEditorSelector((state) => ({
     node: state.document.nodes[nodeId],
     document: state.document,
@@ -38,6 +38,9 @@ export default function NodeView({ nodeId }) {
   const portsVisible = data.showPorts || drawing || data.selected;
   const busResult = resultIndex ? getBusResultForNode(resultIndex, node.id) : null;
   const colorForVoltage = (levelId, outOfService) => {
+    if (outOfService || deenergized) {
+      return getVoltageColor(data.metadata, levelId, true);
+    }
     if (
       node.type === "ElmTerm" &&
       data.analysisOverlay?.options?.visible &&
@@ -46,7 +49,7 @@ export default function NodeView({ nodeId }) {
     ) {
       return voltagePuColor(busResult.voltagePu, busResult.status);
     }
-    return getVoltageColor(data.metadata, levelId, outOfService);
+    return getVoltageColor(data.metadata, levelId, false);
   };
 
   const selectForInteraction = (event) => {
@@ -79,6 +82,7 @@ export default function NodeView({ nodeId }) {
       y={node.position.y}
       rotation={node.rotation ?? 0}
       draggable={!readOnly && data.tool === "select"}
+      opacity={deenergized && !data.selected ? 0.52 : 1}
       onMouseDown={selectForInteraction}
       onClick={handleBodyClick}
       onTap={(event) => {
@@ -109,7 +113,7 @@ export default function NodeView({ nodeId }) {
       <SymbolComponent node={node} selected={data.selected} getVoltageColor={colorForVoltage} />
 
       {definition.showDefaultLabel !== false && node.properties.name && (
-        <Text text={node.properties.name} x={label.x} y={label.y} width={label.width} align={label.align} fontSize={3.2} fill="#334155" listening={false} />
+        <Text text={node.properties.name} x={label.x} y={label.y} width={label.width} align={label.align} fontSize={3.2} fill={deenergized ? "#94a3b8" : "#334155"} listening={false} />
       )}
 
       {portsVisible && ports.map((port) => {
@@ -121,7 +125,7 @@ export default function NodeView({ nodeId }) {
             y={port.y}
             radius={active ? 1.7 : 1.15}
             fill={active ? "#f59e0b" : "#ffffff"}
-            stroke={active ? "#b45309" : drawing ? "#0f766e" : "#64748b"}
+            stroke={active ? "#b45309" : deenergized ? "#94a3b8" : drawing ? "#0f766e" : "#64748b"}
             opacity={drawing || data.selected ? 1 : 0.65}
             strokeWidth={0.65}
             hitStrokeWidth={5}

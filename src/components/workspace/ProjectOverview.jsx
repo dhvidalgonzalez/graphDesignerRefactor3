@@ -114,7 +114,7 @@ export default function ProjectOverview() {
           </div>
           <div className="project-collaboration-placeholder">
             <Icon name="spark" size={20} />
-            <div><strong>Colaboración preparada para una siguiente etapa</strong><p>El proyecto ya distingue propietarios, editores y lectores. Las invitaciones se registran en DynamoDB y se aceptan con una cuenta autenticada.</p></div>
+            <div><strong>Colaboración preparada para una siguiente etapa</strong><p>El proyecto distingue propietarios, editores y lectores. Las invitaciones se gestionan desde la aplicación y se aceptan con una cuenta activa.</p></div>
           </div>
         </section>
       )}
@@ -131,7 +131,7 @@ export default function ProjectOverview() {
             <article><span>Topología</span><strong>{activeProject.multiDiagram ? "Proyecto multidiagrama" : "Diagramas independientes"}</strong></article>
             <article className="project-settings-summary-grid--wide"><span>Descripción</span><p>{activeProject.description || "Sin descripción"}</p></article>
             <article><span>Creado</span><strong>{formatDate(activeProject.createdAt)}</strong></article>
-            <article><span>Identificador cloud</span><code>{activeProject.id}</code></article>
+            <article><span>Identificador del proyecto</span><code>{activeProject.id}</code></article>
           </div>
           {session?.isGlobalAdmin && activeProject.canManage && (
             <div className="project-template-admin-zone">
@@ -140,7 +140,7 @@ export default function ProjectOverview() {
                 <strong>{activeProject.publishedTemplateId ? "Ejemplo publicado" : "Publicar en el catálogo general"}</strong>
                 <p>{activeProject.publishedTemplateId
                   ? "Puedes reemplazar el ejemplo vigente con el estado actual guardado del proyecto. Las copias existentes permanecerán intactas."
-                  : "Como Global Admin puedes crear un ejemplo oficial a partir de este proyecto sin convertir ni bloquear el proyecto original."}</p>
+                  : "Como administrador global puedes crear un ejemplo oficial a partir de este proyecto sin convertir ni bloquear el proyecto original."}</p>
                 {activeProject.publishedTemplateId && <code>{activeProject.publishedTemplateId}</code>}
               </div>
               <button className="button button--primary" type="button" onClick={actions.openPublishTemplate}>

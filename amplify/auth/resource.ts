@@ -6,6 +6,10 @@ export const auth = defineAuth({
     email: true,
   },
   groups: ["GLOBAL_ADMIN"],
+  multifactor: {
+    mode: "OPTIONAL",
+    totp: true,
+  },
   userAttributes: {
     givenName: {
       mutable: true,

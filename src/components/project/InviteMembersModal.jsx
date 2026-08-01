@@ -92,7 +92,7 @@ export default function InviteMembersModal() {
         tone: invitation.emailDeliveryStatus === "SENT" ? "success" : "warning",
         text: invitation.emailDeliveryStatus === "SENT"
           ? `El correo fue reenviado a ${invitation.email}.`
-          : `La invitación sigue activa, pero el reenvío falló: ${invitation.emailError || "revisa Amazon SES"}.`,
+          : `La invitación sigue activa, pero el reenvío falló: ${invitation.emailError || "revisa el servicio de correo"}.`,
       });
     } catch (error) {
       setMessage({

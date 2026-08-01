@@ -14,6 +14,9 @@ import NodeView from "./NodeView.jsx";
 import EdgeView from "./EdgeView.jsx";
 import ConnectionPreview from "./ConnectionPreview.jsx";
 import AnalysisOverlayLayer from "./AnalysisOverlayLayer.jsx";
+import { getDiagramEnergizationState } from "../../domain/analysis/analysisTopologyScope.js";
+import { buildProjectAnalysisDocument } from "../../domain/electrical/projectTopology.js";
+import { useWorkspace } from "../../workspace/WorkspaceContext.jsx";
 
 const DRAW_TOOLS = new Set(["path", "line"]);
 
@@ -66,11 +69,36 @@ export default function DiagramCanvas() {
       tool: state.tool,
       draft: state.connectionDraft,
       analysisOverlay: state.ui.analysisOverlay,
+      analysisOperatingCaseId: state.ui.analysisOperatingCaseId,
     }),
     shallowEqual,
   );
+  const { activeProject, activeDiagram } = useWorkspace();
   const nodeIds = useMemo(() => Object.keys(data.document.nodes), [data.document.nodes]);
   const edgeIds = useMemo(() => Object.keys(data.document.edges), [data.document.edges]);
+  const projectSnapshot = useMemo(() => {
+    if (!activeProject?.multiDiagram) return null;
+    return {
+      ...activeProject,
+      diagrams: (activeProject.diagrams ?? []).map((sheet) => (
+        sheet.id === data.document.id ? { ...sheet, document: data.document } : sheet
+      )),
+    };
+  }, [activeProject, data.document]);
+  const analysisScopeDocument = useMemo(
+    () => buildProjectAnalysisDocument(projectSnapshot, activeDiagram?.id) ?? data.document,
+    [activeDiagram?.id, data.document, projectSnapshot],
+  );
+  const energization = useMemo(
+    () => getDiagramEnergizationState(
+      analysisScopeDocument,
+      data.analysisOperatingCaseId,
+      activeDiagram?.id ?? data.document.id,
+    ),
+    [activeDiagram?.id, analysisScopeDocument, data.analysisOperatingCaseId, data.document.id],
+  );
+  const deenergizedElementCount = energization.deenergizedNodeIds.size
+    + energization.deenergizedEdgeIds.size;
   const actions = useEditorActions();
   const store = useEditorStore();
   const { registerExporter } = useDiagramExport();
@@ -247,10 +275,10 @@ export default function DiagramCanvas() {
       >
         <Layer ref={contentLayerRef} x={data.viewport.x} y={data.viewport.y} scaleX={data.viewport.scale} scaleY={data.viewport.scale}>
           <GridLayer width={size.width} height={size.height} />
-          {edgeIds.map((edgeId) => <EdgeView key={edgeId} edgeId={edgeId} />)}
-          {nodeIds.map((nodeId) => <NodeView key={nodeId} nodeId={nodeId} />)}
+          {edgeIds.map((edgeId) => <EdgeView key={edgeId} edgeId={edgeId} deenergized={energization.deenergizedEdgeIds.has(edgeId)} />)}
+          {nodeIds.map((nodeId) => <NodeView key={nodeId} nodeId={nodeId} deenergized={energization.deenergizedNodeIds.has(nodeId)} />)}
           <ConnectionPreview />
-          <AnalysisOverlayLayer />
+          <AnalysisOverlayLayer energization={energization} />
           {selectionRect && (
             <Rect
               x={selectionRect.x}
@@ -266,6 +294,12 @@ export default function DiagramCanvas() {
           )}
         </Layer>
       </Stage>
+      {energization.hasSlackReference && deenergizedElementCount > 0 && (
+        <div className="analysis-island-badge" role="status">
+          <strong>Subred aislada o fuera de servicio</strong>
+          <span>{deenergizedElementCount} elemento(s) de esta hoja fuera del alcance del caso activo</span>
+        </div>
+      )}
       {data.analysisOverlay?.result && (
         <div className="analysis-canvas-badge">
           <div>

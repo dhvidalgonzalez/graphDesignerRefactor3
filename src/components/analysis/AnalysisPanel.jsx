@@ -11,6 +11,7 @@ import {
   normalizeAnalysisOptions,
 } from "../../domain/analysis/analysisRegistry.js";
 import { getOperatingCase, normalizeOperatingCases } from "../../domain/analysis/operatingCases.js";
+import { createAnalysisTopologyScope } from "../../domain/analysis/analysisTopologyScope.js";
 import { buildProjectAnalysisDocument, localIdFromGlobal } from "../../domain/electrical/projectTopology.js";
 import {
   formatCurrentA,
@@ -99,13 +100,12 @@ function IssueList({ title, items, tone }) {
   );
 }
 
-function OverviewTab({ document, validation, activeDiagram }) {
-  const cases = normalizeOperatingCases(document.operatingCases);
+function OverviewTab({ document, validation, activeDiagram, activeOperatingCaseId }) {
   const configuration = normalizeAnalysisConfiguration(document.analysisConfiguration);
-  const defaultCase = cases.find((item) => item.isDefault) ?? cases[0];
+  const selectedCase = getOperatingCase(document, activeOperatingCaseId);
   const request = createAnalysisRequestPreview(document, {
     diagramId: activeDiagram?.id ?? document.id,
-    operatingCaseId: defaultCase.id,
+    operatingCaseId: selectedCase.id,
     expectedDiagramVersion: activeDiagram?.storageVersion ?? "<storageVersion>",
   });
 
@@ -116,9 +116,9 @@ function OverviewTab({ document, validation, activeDiagram }) {
         <h3>Solicitud preparada</h3>
         <div className="read-only-grid">
           <span>Análisis por defecto</span><strong>{analysisTypeLabel(configuration.defaultAnalysisType)}</strong>
-          <span>Caso por defecto</span><strong>{defaultCase.name}</strong>
+          <span>Caso analizado</span><strong>{selectedCase.name}</strong>
           <span>Ejecución</span><strong>{configuration.defaultExecutionPreference}</strong>
-          <span>Versión S3</span><strong>{activeDiagram?.storageVersion ?? "Sin sincronizar"}</strong>
+          <span>Versión guardada</span><strong>{activeDiagram?.storageVersion ?? "Sin sincronizar"}</strong>
           <span>Unidades</span><strong>{analysisUnits(configuration.defaultAnalysisType)} unidad(es)</strong>
         </div>
         <p className="analysis-phase-note">
@@ -237,21 +237,32 @@ function CaseOverrideFields({ component, value, disabled, onChange, onClear }) {
   );
 }
 
-function CasesTab({ document, validation, actions, canEdit }) {
+function CasesTab({ document, configurableComponents, actions, canEdit, activeOperatingCaseId, onOperatingCaseChange }) {
   const cases = normalizeOperatingCases(document.operatingCases);
-  const [selectedCaseId, setSelectedCaseId] = useState(() => cases.find((item) => item.isDefault)?.id ?? cases[0]?.id);
+  const [selectedCaseId, setSelectedCaseId] = useState(
+    () => getOperatingCase(document, activeOperatingCaseId).id,
+  );
   const selectedCase = getOperatingCase(document, selectedCaseId);
-  const configurableComponents = validation.model.components;
+
+  useEffect(() => {
+    const nextId = getOperatingCase(document, activeOperatingCaseId).id;
+    if (nextId !== selectedCaseId) setSelectedCaseId(nextId);
+  }, [activeOperatingCaseId, document, selectedCaseId]);
+
+  const chooseCase = (caseId) => {
+    setSelectedCaseId(caseId);
+    onOperatingCaseChange?.(caseId);
+  };
 
   const addCase = () => {
     const id = actions.addOperatingCase();
-    if (id) setSelectedCaseId(id);
+    if (id) chooseCase(id);
   };
 
   return (
     <div className="analysis-tab-content">
       <div className="analysis-toolbar-row">
-        <select value={selectedCase.id} onChange={(event) => setSelectedCaseId(event.target.value)}>
+        <select value={selectedCase.id} onChange={(event) => chooseCase(event.target.value)}>
           {cases.map((item) => <option key={item.id} value={item.id}>{item.name}{item.isDefault ? " · predeterminado" : ""}</option>)}
         </select>
         <button className="button button--soft" type="button" disabled={!canEdit} onClick={addCase}>＋ Caso</button>
@@ -282,7 +293,7 @@ function CasesTab({ document, validation, actions, canEdit }) {
             disabled={!canEdit || cases.length <= 1}
             onClick={() => {
               if (actions.removeOperatingCase(selectedCase.id)) {
-                setSelectedCaseId(cases.find((item) => item.id !== selectedCase.id)?.id);
+                chooseCase(cases.find((item) => item.id !== selectedCase.id)?.id);
               }
             }}
           >
@@ -386,20 +397,20 @@ function ConfigurationTab({ configuration, actions, canEdit }) {
   );
 }
 
-function ModelTab({ document, validation, activeDiagram }) {
-  const defaultCase = normalizeOperatingCases(document.operatingCases).find((item) => item.isDefault);
+function ModelTab({ document, validation, activeDiagram, activeOperatingCaseId }) {
+  const selectedCase = getOperatingCase(document, activeOperatingCaseId);
   const downloadInput = () => {
     const preview = createAnalysisInputPreview(document, {
       diagramId: activeDiagram?.id ?? document.id,
       diagramStorageVersion: activeDiagram?.storageVersion ?? "<storageVersion>",
-      operatingCaseId: defaultCase?.id,
+      operatingCaseId: selectedCase.id,
     });
     downloadTextFile(`${safeFilename(document.name)}-analysis-input-preview.json`, JSON.stringify(preview, null, 2));
   };
   const downloadRequest = () => {
     const preview = createAnalysisRequestPreview(document, {
         diagramId: activeDiagram?.id ?? document.id,
-      operatingCaseId: defaultCase?.id,
+      operatingCaseId: selectedCase.id,
       expectedDiagramVersion: activeDiagram?.storageVersion ?? "<storageVersion>",
     });
     downloadTextFile(`${safeFilename(document.name)}-analysis-request-preview.json`, JSON.stringify(preview, null, 2));
@@ -610,6 +621,8 @@ function ExecutionTab({
   activeDiagram,
   editorActions,
   workspaceActions,
+  activeOperatingCaseId,
+  onOperatingCaseChange,
 }) {
   const cases = normalizeOperatingCases(document.operatingCases);
   const defaultCase = cases.find((item) => item.isDefault) ?? cases[0];
@@ -617,7 +630,9 @@ function ExecutionTab({
   const initialType = ANALYSIS_TYPES.includes(configuration.defaultAnalysisType) ? configuration.defaultAnalysisType : "POWER_FLOW";
   const [analysisType, setAnalysisType] = useState(initialType);
   const [analysisOptions, setAnalysisOptions] = useState(() => createDefaultAnalysisOptions(initialType));
-  const [selectedCaseId, setSelectedCaseId] = useState(defaultCase.id);
+  const [selectedCaseId, setSelectedCaseId] = useState(
+    () => getOperatingCase(document, activeOperatingCaseId).id,
+  );
   const [executionPreference, setExecutionPreference] = useState(defaultPreference);
   const [studyName, setStudyName] = useState("");
   const [currentStudy, setCurrentStudy] = useState(null);
@@ -632,14 +647,26 @@ function ExecutionTab({
   const [preparedValidation, setPreparedValidation] = useState(null);
 
   const validation = useMemo(
-    () => evaluateAnalysisReadinessForType(document, analysisType, analysisOptions),
-    [document, analysisType, analysisOptions],
+    () => evaluateAnalysisReadinessForType(
+      document,
+      analysisType,
+      analysisOptions,
+      { operatingCaseId: selectedCaseId },
+    ),
+    [document, analysisType, analysisOptions, selectedCaseId],
   );
   const definition = getAnalysisDefinition(analysisType);
 
   useEffect(() => {
-    if (!cases.some((item) => item.id === selectedCaseId)) setSelectedCaseId(defaultCase.id);
-  }, [cases, defaultCase.id, selectedCaseId]);
+    const requested = getOperatingCase(document, activeOperatingCaseId).id;
+    const nextId = cases.some((item) => item.id === requested) ? requested : defaultCase.id;
+    if (nextId !== selectedCaseId) setSelectedCaseId(nextId);
+  }, [activeOperatingCaseId, cases, defaultCase.id, document, selectedCaseId]);
+
+  const chooseOperatingCase = (caseId) => {
+    setSelectedCaseId(caseId);
+    onOperatingCaseChange?.(caseId);
+  };
 
   const changeType = (nextType) => {
     setAnalysisType(nextType);
@@ -712,10 +739,10 @@ function ExecutionTab({
             ...(visualElectricalModel ? { visualElectricalModel } : {}),
           });
           setMessage("Resultado activo sobre los componentes visibles de esta hoja.");
-        } else setMessage("result.json descargado desde S3.");
+        } else setMessage("Resultado descargado correctamente.");
         return parsed;
       }
-      setMessage(`${type.toLowerCase()} descargado desde S3.`);
+      setMessage(`${type.toLowerCase()} descargado correctamente.`);
       return loaded.text;
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : String(nextError));
@@ -769,7 +796,7 @@ function ExecutionTab({
         activeDiagram.id,
         sourceDocument,
       );
-      editorActions.setPersistence("saved", "Guardado en la nube");
+      editorActions.setPersistence("saved", "Cambios guardados");
 
       let expectedDiagramVersions = {
         [activeDiagram.id]: Number(activeSaved.storageVersion),
@@ -800,6 +827,7 @@ function ExecutionTab({
           preparedDocument,
           analysisType,
           normalizedOptions,
+          { operatingCaseId: selectedCaseId },
         );
         setPreparedValidation({
           readiness: projectValidation.readiness,
@@ -872,7 +900,7 @@ function ExecutionTab({
         </label>
         <label className="property-field">
           <span>Caso base</span>
-          <select value={selectedCase.id} onChange={(event) => setSelectedCaseId(event.target.value)}>
+          <select value={selectedCase.id} onChange={(event) => chooseOperatingCase(event.target.value)}>
             {cases.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
           </select>
         </label>
@@ -880,7 +908,7 @@ function ExecutionTab({
           <span>Modo de ejecución</span>
           <select value={executionPreference} onChange={(event) => setExecutionPreference(event.target.value)}>
             <option value="AUTO">Automática</option>
-            <option value="STANDARD">Estándar · Lambda</option>
+            <option value="STANDARD">Ejecución estándar</option>
           </select>
         </label>
         <AnalysisSpecificOptions analysisType={analysisType} value={analysisOptions} onChange={setAnalysisOptions} document={document} validation={validation} />
@@ -890,7 +918,7 @@ function ExecutionTab({
           <span>Versión actual</span><strong>{activeDiagram?.storageVersion ?? 0}</strong>
           <span>Alcance</span><strong>{activeProject?.multiDiagram ? `${activeProject.diagrams.length} diagramas` : "Hoja activa"}</strong>
           <span>Unidades reservadas</span><strong>{analysisUnits(analysisType)}</strong>
-          <span>Proveedor</span><strong>Lambda Docker</strong>
+          <span>Motor</span><strong>Cálculo eléctrico estándar</strong>
         </div>
         <button className="button button--primary analysis-run-button" type="button" disabled={!canRun} onClick={runAnalysis}>
           {busy
@@ -909,6 +937,9 @@ function ExecutionTab({
         ) : null}
       </section>
 
+      <IssueList title="Errores bloqueantes" items={displayedValidation.errors} tone="error" />
+      <IssueList title="Advertencias del caso" items={displayedValidation.warnings} tone="warning" />
+
       {preparation && (
         <section className="analysis-preparation-progress" role="status" aria-live="polite">
           <span className="loading-spinner" aria-hidden="true" />
@@ -923,13 +954,6 @@ function ExecutionTab({
       )}
 
       {(message || error) && <section className={`analysis-operation-message ${error ? "analysis-operation-message--error" : ""}`}>{error || message}</section>}
-
-      {preparedValidation?.readiness === "NOT_READY" && (
-        <>
-          <IssueList title="Errores del proyecto multidiagrama" items={preparedValidation.errors} tone="error" />
-          <IssueList title="Advertencias del proyecto multidiagrama" items={preparedValidation.warnings} tone="warning" />
-        </>
-      )}
 
       {currentStudy && (
         <section className="analysis-section-card">
@@ -1268,12 +1292,102 @@ function ResultsTab({ overlay, actions, activeDiagram, document }) {
   );
 }
 
+function AnalysisQuickPanel({
+  validation,
+  operatingCase,
+  history,
+  historyLoading,
+  overlay,
+  onOpen,
+  onClose,
+  onRefresh,
+}) {
+  const islandWarnings = validation.warnings.filter(
+    (item) => item.code === "ISLAND_EXCLUDED_FROM_ANALYSIS",
+  );
+  return (
+    <aside className="properties-panel analysis-quick-panel">
+      <div className="panel-header analysis-quick-header">
+        <div>
+          <span className="eyebrow">Referencia rápida</span>
+          <h2>Análisis</h2>
+        </div>
+        <div className="analysis-quick-header-actions">
+          <button className="mini-button" type="button" onClick={() => onOpen("execute")} title="Abrir centro de análisis">↗</button>
+          <button className="mini-button" type="button" onClick={onClose} title="Cerrar resumen lateral">×</button>
+        </div>
+      </div>
+
+      <div className="analysis-quick-content">
+        <button className="button button--primary analysis-quick-open" type="button" onClick={() => onOpen("execute")}>
+          Abrir centro de análisis
+        </button>
+
+        <section className={`analysis-readiness analysis-readiness--${validation.readiness.toLowerCase()}`}>
+          <span>Caso visualizado</span>
+          <strong>{operatingCase.name}</strong>
+          <small>{READINESS_LABELS[validation.readiness]} · {validation.errors.length} errores · {validation.warnings.length} advertencias</small>
+        </section>
+
+        {islandWarnings.length > 0 && (
+          <section className="analysis-quick-island-note">
+            <strong>{islandWarnings.length} subred(es) aislada(s)</strong>
+            <span>Se muestran en gris y no se enviarán al solver.</span>
+          </section>
+        )}
+
+        <div className="analysis-quick-stat-grid">
+          <div><span>Barras</span><strong>{validation.statistics.busCount}</strong></div>
+          <div><span>Ramas</span><strong>{validation.statistics.branchCount}</strong></div>
+          <div><span>Cargas</span><strong>{validation.statistics.loadCount}</strong></div>
+        </div>
+
+        {overlay?.result && (
+          <section className="analysis-quick-active-result">
+            <span className="eyebrow">Resultado activo</span>
+            <strong>{overlay.study?.name || analysisTypeLabel(overlay.result.analysisType)}</strong>
+            <small>{analysisTypeLabel(overlay.result.analysisType)} · {overlay.result.convergence?.converged ? "Convergió" : "Revisar convergencia"}</small>
+            <button className="button button--soft" type="button" onClick={() => onOpen("results")}>Ver resultados</button>
+          </section>
+        )}
+
+        <section className="analysis-quick-history">
+          <div className="analysis-study-heading">
+            <h3>Estudios recientes</h3>
+            <button className="mini-button" type="button" disabled={historyLoading} onClick={onRefresh} title="Actualizar">↻</button>
+          </div>
+          <div className="analysis-quick-study-list">
+            {history.slice(0, 8).map((study) => (
+              <button key={study.id} type="button" onClick={() => onOpen("execute")}>
+                <span className={`analysis-status analysis-status--${statusTone(study.status)}`}>
+                  {ANALYSIS_STATUS_LABELS[study.status] ?? study.status}
+                </span>
+                <strong>{study.name || analysisTypeLabel(study.analysisType)}</strong>
+                <small>{formatStudyDate(study.requestedAt)}</small>
+              </button>
+            ))}
+            {!historyLoading && !history.length && <p>Todavía no hay estudios ejecutados.</p>}
+          </div>
+        </section>
+      </div>
+    </aside>
+  );
+}
+
 export default function AnalysisPanel() {
-  const editorData = useEditorSelector((state) => ({ document: state.document, analysisOverlay: state.ui.analysisOverlay }), shallowEqual);
+  const editorData = useEditorSelector((state) => ({
+    document: state.document,
+    analysisOverlay: state.ui.analysisOverlay,
+    modalOpen: Boolean(state.ui.analysisModalOpen),
+    operatingCaseId: state.ui.analysisOperatingCaseId,
+  }), shallowEqual);
   const document = editorData.document;
   const editorActions = useEditorActions();
   const { activeProject, activeDiagram, actions: workspaceActions } = useWorkspace();
   const [tab, setTab] = useState("execute");
+  const [quickHistory, setQuickHistory] = useState([]);
+  const [quickHistoryLoading, setQuickHistoryLoading] = useState(false);
+
   const projectSnapshot = useMemo(() => {
     if (!activeProject) return null;
     return {
@@ -1287,22 +1401,157 @@ export default function AnalysisPanel() {
     () => buildProjectAnalysisDocument(projectSnapshot, activeDiagram?.id) ?? document,
     [activeDiagram?.id, document, projectSnapshot],
   );
-  const validation = useMemo(() => evaluateAnalysisReadiness(analysisDocument), [analysisDocument]);
+  const operatingCase = useMemo(
+    () => getOperatingCase(document, editorData.operatingCaseId),
+    [document, editorData.operatingCaseId],
+  );
+  const validation = useMemo(
+    () => evaluateAnalysisReadiness(
+      analysisDocument,
+      { operatingCaseId: operatingCase.id },
+    ),
+    [analysisDocument, operatingCase.id],
+  );
+  const configurableComponents = useMemo(
+    () => createAnalysisTopologyScope(document, operatingCase.id).appliedModel.components,
+    [document, operatingCase.id],
+  );
   const configuration = normalizeAnalysisConfiguration(document.analysisConfiguration);
 
+  const refreshQuickHistory = useCallback(async () => {
+    if (!activeProject?.id || !activeDiagram?.id) {
+      setQuickHistory([]);
+      return [];
+    }
+    setQuickHistoryLoading(true);
+    try {
+      const studies = activeProject.multiDiagram
+        ? await listAnalysisStudiesByProjectService(activeProject.id)
+        : await listAnalysisStudiesByDiagramService(activeDiagram.id);
+      setQuickHistory(studies);
+      return studies;
+    } catch (error) {
+      console.warn("No fue posible actualizar el resumen de análisis.", error);
+      return [];
+    } finally {
+      setQuickHistoryLoading(false);
+    }
+  }, [activeDiagram?.id, activeProject?.id, activeProject?.multiDiagram]);
+
+  useEffect(() => {
+    refreshQuickHistory();
+    const timer = window.setInterval(refreshQuickHistory, 8000);
+    return () => window.clearInterval(timer);
+  }, [refreshQuickHistory]);
+
+  useEffect(() => {
+    if (!editorData.modalOpen) return undefined;
+    const onKeyDown = (event) => {
+      if (event.key === "Escape") editorActions.closeAnalysisModal();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [editorActions, editorData.modalOpen]);
+
+  const openAnalysis = (nextTab = tab) => {
+    setTab(nextTab);
+    editorActions.openAnalysisModal();
+  };
+  const chooseOperatingCase = (caseId) => editorActions.setAnalysisOperatingCase(caseId);
+  const tabs = [
+    ["execute", "Ejecutar"],
+    ["results", "Resultados"],
+    ["labels", "Etiquetas"],
+    ["overview", "Preparación"],
+    ["cases", "Casos"],
+    ["configuration", "Solver"],
+    ["model", "Modelo"],
+  ];
+
   return (
-    <aside className="properties-panel analysis-panel">
-      <div className="panel-header analysis-panel-header"><div><span className="eyebrow">Ejecución y datos</span><h2>Análisis eléctricos</h2></div><button className="mini-button" type="button" onClick={editorActions.closeAnalysisPanel} title="Volver a propiedades">×</button></div>
-      <div className="analysis-tabs" role="tablist">
-        {[["execute", "Ejecutar"], ["results", "Resultados"], ["labels", "Etiquetas"], ["overview", "Preparación"], ["cases", "Casos"], ["configuration", "Solver"], ["model", "Modelo"]].map(([id, label]) => <button key={id} type="button" className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>)}
-      </div>
-      {tab === "execute" && <ExecutionTab document={analysisDocument} sourceDocument={document} configuration={configuration} activeProject={activeProject} activeDiagram={activeDiagram} editorActions={editorActions} workspaceActions={workspaceActions} />}
-      {tab === "results" && <ResultsTab overlay={editorData.analysisOverlay} actions={editorActions} activeDiagram={activeDiagram} document={document} />}
-      {tab === "labels" && <LabelsTab overlay={editorData.analysisOverlay} actions={editorActions} />}
-      {tab === "overview" && <OverviewTab document={analysisDocument} validation={validation} activeDiagram={activeDiagram} />}
-      {tab === "cases" && <CasesTab document={document} validation={validation} actions={editorActions} canEdit={Boolean(activeProject?.canEdit)} />}
-      {tab === "configuration" && <ConfigurationTab configuration={configuration} actions={editorActions} canEdit={Boolean(activeProject?.canEdit)} />}
-      {tab === "model" && <ModelTab document={analysisDocument} validation={validation} activeDiagram={activeDiagram} />}
-    </aside>
+    <>
+      <AnalysisQuickPanel
+        validation={validation}
+        operatingCase={operatingCase}
+        history={quickHistory}
+        historyLoading={quickHistoryLoading}
+        overlay={editorData.analysisOverlay}
+        onOpen={openAnalysis}
+        onClose={editorActions.closeAnalysisPanel}
+        onRefresh={refreshQuickHistory}
+      />
+
+      {editorData.modalOpen && (
+        <div
+          className="analysis-modal-backdrop"
+          role="presentation"
+          onMouseDown={(event) => {
+            if (event.target === event.currentTarget) editorActions.closeAnalysisModal();
+          }}
+        >
+          <section className="analysis-workspace-modal" role="dialog" aria-modal="true" aria-labelledby="analysis-workspace-title">
+            <header className="analysis-workspace-header">
+              <div>
+                <span className="eyebrow">Centro de estudios</span>
+                <h2 id="analysis-workspace-title">Análisis eléctricos</h2>
+                <p>{activeProject?.name || "Proyecto"} · {activeDiagram?.name || document.name}</p>
+              </div>
+              <button className="mini-button" type="button" onClick={editorActions.closeAnalysisModal} title="Cerrar centro de análisis">×</button>
+            </header>
+
+            <div className="analysis-tabs analysis-modal-tabs" role="tablist">
+              {tabs.map(([id, label]) => (
+                <button key={id} type="button" className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{label}</button>
+              ))}
+            </div>
+
+            <div className="analysis-modal-scroll">
+              {tab === "execute" && (
+                <ExecutionTab
+                  document={analysisDocument}
+                  sourceDocument={document}
+                  configuration={configuration}
+                  activeProject={activeProject}
+                  activeDiagram={activeDiagram}
+                  editorActions={editorActions}
+                  workspaceActions={workspaceActions}
+                  activeOperatingCaseId={operatingCase.id}
+                  onOperatingCaseChange={chooseOperatingCase}
+                />
+              )}
+              {tab === "results" && <ResultsTab overlay={editorData.analysisOverlay} actions={editorActions} activeDiagram={activeDiagram} document={document} />}
+              {tab === "labels" && <LabelsTab overlay={editorData.analysisOverlay} actions={editorActions} />}
+              {tab === "overview" && (
+                <OverviewTab
+                  document={analysisDocument}
+                  validation={validation}
+                  activeDiagram={activeDiagram}
+                  activeOperatingCaseId={operatingCase.id}
+                />
+              )}
+              {tab === "cases" && (
+                <CasesTab
+                  document={document}
+                  configurableComponents={configurableComponents}
+                  actions={editorActions}
+                  canEdit={Boolean(activeProject?.canEdit)}
+                  activeOperatingCaseId={operatingCase.id}
+                  onOperatingCaseChange={chooseOperatingCase}
+                />
+              )}
+              {tab === "configuration" && <ConfigurationTab configuration={configuration} actions={editorActions} canEdit={Boolean(activeProject?.canEdit)} />}
+              {tab === "model" && (
+                <ModelTab
+                  document={analysisDocument}
+                  validation={validation}
+                  activeDiagram={activeDiagram}
+                  activeOperatingCaseId={operatingCase.id}
+                />
+              )}
+            </div>
+          </section>
+        </div>
+      )}
+    </>
   );
 }

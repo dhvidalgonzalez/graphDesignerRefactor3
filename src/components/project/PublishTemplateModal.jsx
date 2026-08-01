@@ -98,7 +98,7 @@ export default function PublishTemplateModal() {
         </label>
         <div className="template-publication-note">
           <strong>Contenido que se publicará</strong>
-          <span>{activeProject.diagrams.length} {activeProject.diagrams.length === 1 ? "diagrama" : "diagramas"} · documentos actuales guardados en S3</span>
+          <span>{activeProject.diagrams.length} {activeProject.diagrams.length === 1 ? "diagrama" : "diagramas"} · contenido actual guardado</span>
         </div>
         {error && <div className="form-error-message">{error}</div>}
         <div className="modal-actions modal-actions--single">

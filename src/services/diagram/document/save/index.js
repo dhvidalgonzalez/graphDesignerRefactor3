@@ -41,7 +41,7 @@ export async function saveDiagramDocumentService(
 
   if (!response.ok) {
     throw new Error(
-      `S3 rechazó el guardado del diagrama (${response.status}).`,
+      `El almacenamiento rechazó el guardado del diagrama (${response.status}).`,
     );
   }
 

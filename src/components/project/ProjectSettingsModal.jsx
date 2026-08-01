@@ -41,7 +41,7 @@ export default function ProjectSettingsModal() {
   };
 
   const remove = async () => {
-    if (!window.confirm(`¿Eliminar “${activeProject.name}” y todos sus diagramas almacenados en S3?`)) return;
+    if (!window.confirm(`¿Eliminar “${activeProject.name}” y todos sus diagramas asociados?`)) return;
     setSubmitting(true);
     setError("");
     try {
@@ -88,13 +88,13 @@ export default function ProjectSettingsModal() {
             <span>Identificador</span><code>{activeProject.id}</code>
             <span>Diagramas</span><strong>{activeProject.diagrams.length}</strong>
             <span>Modo de análisis</span><strong>{multiDiagram ? "Red multidiagrama" : "Hoja individual"}</strong>
-            <span>Persistencia</span><strong>DynamoDB + S3</strong>
+            <span>Guardado</span><strong>Proyecto y diagramas</strong>
           </div>
         </section>
 
         <section className="project-access-section">
           <div className="access-heading">
-            <div><h3>Personas con acceso</h3><p>Los roles se aplican tanto a los metadatos como a las URLs firmadas de los documentos.</p></div>
+            <div><h3>Personas con acceso</h3><p>Los roles se aplican al proyecto, sus diagramas y los documentos asociados.</p></div>
             <button className="button" type="button" disabled={!activeProject.canManage || submitting} onClick={() => { actions.closeProjectSettings(); actions.openInviteMembers(); }}>Invitar persona</button>
           </div>
           <div className="member-list">
@@ -107,8 +107,8 @@ export default function ProjectSettingsModal() {
             ))}
           </div>
           <div className="future-access-note">
-            <strong>Control de acceso cloud</strong>
-            <span>Propietarios y editores pueden guardar; lectores sólo descargan el JSON mediante una URL temporal validada en el backend.</span>
+            <strong>Control de acceso</strong>
+            <span>Propietarios y editores pueden guardar cambios; los lectores disponen de acceso de consulta y exportación controlada.</span>
           </div>
         </section>
 

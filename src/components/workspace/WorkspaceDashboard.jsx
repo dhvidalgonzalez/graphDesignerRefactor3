@@ -81,7 +81,7 @@ export default function WorkspaceDashboard() {
         </div>
 
         {status === "loading" ? (
-          <div className="workspace-empty-state"><span className="session-loader" /><h3>Cargando proyectos</h3><p>Consultando tu espacio de trabajo en DynamoDB.</p></div>
+          <div className="workspace-empty-state"><span className="session-loader" /><h3>Cargando proyectos</h3><p>Preparando tus proyectos y accesos recientes.</p></div>
         ) : visibleProjects.length ? (
           <div className={`workspace-project-collection workspace-project-collection--${view}`}>
             {visibleProjects.map((project) => (

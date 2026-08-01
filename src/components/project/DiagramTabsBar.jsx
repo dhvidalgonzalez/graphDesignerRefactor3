@@ -43,13 +43,13 @@ export default function DiagramTabsBar() {
   const syncCurrentForCopy = async () => {
     persistDraftOnly();
     if (!activeProject.canEdit || persistence.status === "saved") return;
-    editorActions.setPersistence("saving", "Sincronizando con S3…");
+    editorActions.setPersistence("saving", "Guardando cambios…");
     await actions.saveDiagramDocument(
       activeProject.id,
       activeDiagram.id,
       store.getState().document,
     );
-    editorActions.setPersistence("saved", "Guardado en la nube");
+    editorActions.setPersistence("saved", "Cambios guardados");
   };
 
   const run = async (task) => {
@@ -136,7 +136,7 @@ export default function DiagramTabsBar() {
                   {active && ["dirty", "error", "conflict"].includes(persistence.status) && (
                     <i
                       className={`unsaved-mark ${persistence.status === "conflict" ? "unsaved-mark--conflict" : ""}`}
-                      title={persistence.status === "conflict" ? "Existe una versión más reciente en la nube" : "Cambios pendientes"}
+                      title={persistence.status === "conflict" ? "Existe una versión más reciente del diagrama" : "Cambios pendientes"}
                     />
                   )}
                 </button>
@@ -162,7 +162,7 @@ export default function DiagramTabsBar() {
                 type="button"
                 disabled={activeProject.diagrams.length <= 1}
                 onClick={() => {
-                  if (window.confirm(`¿Eliminar la hoja “${activeDiagram.name}” y su documento de S3?`)) {
+                  if (window.confirm(`¿Eliminar la hoja “${activeDiagram.name}” y su archivo asociado?`)) {
                     run(async () => { await actions.deleteDiagram(activeDiagram.id); setMenuOpen(false); });
                   }
                 }}

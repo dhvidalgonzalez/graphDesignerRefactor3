@@ -21,7 +21,7 @@ export async function loadDiagramDocumentService(projectId, diagramId) {
 
   if (!response.ok) {
     throw new Error(
-      `No fue posible descargar el diagrama desde S3 (${response.status}).`,
+      `No fue posible descargar el diagrama desde el almacenamiento (${response.status}).`,
     );
   }
 

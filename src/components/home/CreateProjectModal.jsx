@@ -35,13 +35,13 @@ export default function CreateProjectModal() {
     <Modal
       open={createProjectOpen}
       title="Crear proyecto"
-      subtitle="Tu espacio de trabajo cloud"
+      subtitle="Comienza con una estructura clara"
       onClose={submitting ? undefined : actions.closeCreateProject}
       size="medium"
     >
       <form className="project-form" onSubmit={submit}>
         <p className="form-lead">
-          Se creará el proyecto en DynamoDB y su primera hoja se almacenará como un documento JSON en S3.
+          Se creará el proyecto junto con su primera hoja, listo para comenzar a dibujar y configurar la red.
         </p>
         <label className="property-field">
           <span>Nombre del proyecto</span>

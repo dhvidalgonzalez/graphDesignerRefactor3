@@ -38,6 +38,7 @@ import { normalizeAnalysisConfiguration } from "../domain/analysis/analysisConfi
 import {
   DEFAULT_ANALYSIS_OVERLAY_OPTIONS,
   defaultAnalysisResultViewId,
+  getAnalysisResultView,
   normalizeAnalysisOverlayOptions,
   normalizeAnalysisResult,
 } from "../domain/analysis/analysisResults.js";
@@ -74,6 +75,10 @@ export function createInitialEditorState(document) {
       voltageLevelsOpen: false,
       electricalEditor: null,
       rightPanelMode: "properties",
+      analysisModalOpen: false,
+      analysisOperatingCaseId: normalizeOperatingCases(document.operatingCases).find((item) => item.isDefault)?.id
+        ?? normalizeOperatingCases(document.operatingCases)[0]?.id
+        ?? "case-normal",
       analysisOverlay: {
         study: null,
         result: null,
@@ -283,7 +288,6 @@ export class EditorStore {
           return {
             ...state,
             selection: { nodeIds, edgeId: null, vertexIndex: null },
-            ui: { ...state.ui, rightPanelMode: "properties" },
           };
         });
       },
@@ -299,7 +303,6 @@ export class EditorStore {
             edgeId: null,
             vertexIndex: null,
           },
-          ui: { ...state.ui, rightPanelMode: "properties" },
         }));
       },
 
@@ -307,7 +310,6 @@ export class EditorStore {
         this.setState((state) => ({
           ...state,
           selection: { nodeIds: [], edgeId, vertexIndex: null },
-          ui: { ...state.ui, rightPanelMode: "properties" },
         }));
       },
 
@@ -605,14 +607,50 @@ export class EditorStore {
       openAnalysisPanel: () => {
         this.setState((state) => ({
           ...state,
-          ui: { ...state.ui, rightPanelMode: "analysis" },
+          ui: {
+            ...state.ui,
+            rightPanelMode: "analysis",
+            analysisModalOpen: true,
+          },
+        }));
+      },
+
+      openAnalysisModal: () => {
+        this.setState((state) => ({
+          ...state,
+          ui: {
+            ...state.ui,
+            rightPanelMode: "analysis",
+            analysisModalOpen: true,
+          },
+        }));
+      },
+
+      closeAnalysisModal: () => {
+        this.setState((state) => ({
+          ...state,
+          ui: { ...state.ui, analysisModalOpen: false },
         }));
       },
 
       closeAnalysisPanel: () => {
         this.setState((state) => ({
           ...state,
-          ui: { ...state.ui, rightPanelMode: "properties" },
+          ui: {
+            ...state.ui,
+            rightPanelMode: "properties",
+            analysisModalOpen: false,
+          },
+        }));
+      },
+
+      setAnalysisOperatingCase: (operatingCaseId) => {
+        this.setState((state) => ({
+          ...state,
+          ui: {
+            ...state.ui,
+            analysisOperatingCaseId: operatingCaseId || state.ui.analysisOperatingCaseId,
+          },
         }));
       },
 
@@ -620,14 +658,20 @@ export class EditorStore {
         const normalized = normalizeAnalysisResult(result);
         const studyId = study?.id || normalized.studyId;
         const diagramId = this.state.document.id || normalized.diagramId;
+        const viewId = defaultAnalysisResultViewId(normalized);
+        const resultView = getAnalysisResultView(normalized, viewId);
+        const resultOperatingCaseId = resultView?.source?.operatingCaseId
+          || normalized.operatingCaseId
+          || study?.operatingCaseId;
         this.setState((state) => ({
           ...state,
           ui: {
             ...state.ui,
+            ...(resultOperatingCaseId ? { analysisOperatingCaseId: resultOperatingCaseId } : {}),
             analysisOverlay: {
               study: study ? { ...study } : null,
               result: normalized,
-              viewId: defaultAnalysisResultViewId(normalized),
+              viewId,
               labelOffsets: {
                 ...parseAnalysisLabelLayoutJson(study?.resultLayoutJson),
                 ...loadAnalysisLabelLayout(diagramId, studyId),
@@ -642,16 +686,21 @@ export class EditorStore {
       },
 
       setAnalysisResultView: (viewId) => {
-        this.setState((state) => ({
-          ...state,
-          ui: {
-            ...state.ui,
-            analysisOverlay: {
-              ...(state.ui.analysisOverlay ?? {}),
-              viewId,
+        this.setState((state) => {
+          const resultView = getAnalysisResultView(state.ui.analysisOverlay?.result, viewId);
+          const resultOperatingCaseId = resultView?.source?.operatingCaseId;
+          return {
+            ...state,
+            ui: {
+              ...state.ui,
+              ...(resultOperatingCaseId ? { analysisOperatingCaseId: resultOperatingCaseId } : {}),
+              analysisOverlay: {
+                ...(state.ui.analysisOverlay ?? {}),
+                viewId,
+              },
             },
-          },
-        }));
+          };
+        });
       },
 
       moveAnalysisResultLabel: (labelId, offset) => {

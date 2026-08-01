@@ -1,6 +1,8 @@
 import { Authenticator, useAuthenticator } from "@aws-amplify/ui-react";
 import AuthGateView from "./view.jsx";
 import { SessionProvider } from "../../../auth/SessionContext.jsx";
+import { SecurityProvider } from "../../../auth/SecurityContext.jsx";
+import MfaSetupModal from "../../account/MfaSetupModal.jsx";
 
 const formFields = {
   signIn: {
@@ -53,7 +55,7 @@ function AuthGateContent({ children }) {
       <div className="session-state-page">
         <span className="session-loader" />
         <strong>Verificando tu sesión…</strong>
-        <p>Estamos conectando la aplicación con Amazon Cognito.</p>
+        <p>Estamos preparando un acceso seguro a tu espacio de trabajo.</p>
       </div>
     );
   }
@@ -72,7 +74,10 @@ function AuthGateContent({ children }) {
 
   return (
     <SessionProvider authenticatorUser={user} signOut={signOut}>
-      {children}
+      <SecurityProvider>
+        {children}
+        <MfaSetupModal />
+      </SecurityProvider>
     </SessionProvider>
   );
 }
