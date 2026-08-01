@@ -215,7 +215,8 @@ const schema = a
         diagramCount: a.integer().default(0),
         componentCount: a.integer().default(0),
         multiDiagram: a.boolean().default(false),
-      }),
+      })
+      .authorization((allow) => [allow.authenticated().to(["read"])]),
 
     Diagram: a
       .model({
