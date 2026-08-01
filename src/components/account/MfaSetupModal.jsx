@@ -1,6 +1,14 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import QRCode from "qrcode";
 import Modal from "../common/Modal.jsx";
 import { useSecurity } from "../../auth/SecurityContext.jsx";
+
+function formatSecret(secret) {
+  return String(secret || "")
+    .replace(/\s+/g, "")
+    .match(/.{1,4}/g)
+    ?.join(" ") || "";
+}
 
 export default function MfaSetupModal() {
   const {
@@ -12,16 +20,23 @@ export default function MfaSetupModal() {
   const [step, setStep] = useState("intro");
   const [setupUri, setSetupUri] = useState("");
   const [sharedSecret, setSharedSecret] = useState("");
+  const [qrDataUrl, setQrDataUrl] = useState("");
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [copied, setCopied] = useState(false);
+
+  const formattedSecret = useMemo(
+    () => formatSecret(sharedSecret),
+    [sharedSecret],
+  );
 
   useEffect(() => {
     if (setupOpen) return;
     setStep("intro");
     setSetupUri("");
     setSharedSecret("");
+    setQrDataUrl("");
     setCode("");
     setBusy(false);
     setError("");
@@ -33,8 +48,18 @@ export default function MfaSetupModal() {
     setError("");
     try {
       const details = await beginTotpSetup();
-      setSetupUri(details.setupUri);
+      const nextSetupUri = details.setupUri || "";
+      const nextQrDataUrl = nextSetupUri
+        ? await QRCode.toDataURL(nextSetupUri, {
+            width: 300,
+            margin: 2,
+            errorCorrectionLevel: "M",
+          })
+        : "";
+
+      setSetupUri(nextSetupUri);
       setSharedSecret(details.sharedSecret);
+      setQrDataUrl(nextQrDataUrl);
       setStep("verify");
     } catch (nextError) {
       setError(nextError instanceof Error
@@ -97,26 +122,41 @@ export default function MfaSetupModal() {
               </div>
             </section>
             <ol className="mfa-step-list">
-              <li><strong>Vincula tu cuenta</strong><span>Abre tu aplicación autenticadora e incorpora una nueva cuenta.</span></li>
-              <li><strong>Guarda la clave</strong><span>Usa el enlace directo o copia la clave manual.</span></li>
+              <li><strong>Escanea el QR</strong><span>Abre tu aplicación autenticadora y escanea el código que generaremos.</span></li>
+              <li><strong>Conserva la alternativa</strong><span>También tendrás un enlace directo y una clave manual de respaldo.</span></li>
               <li><strong>Confirma el código</strong><span>Ingresa el código temporal de 6 dígitos para completar la activación.</span></li>
             </ol>
           </>
         ) : (
           <div className="mfa-verify-grid">
-            <section className="mfa-setup-card">
+            <section className="mfa-setup-card mfa-qr-card">
               <span className="eyebrow">Paso 1</span>
-              <h3>Vincula la aplicación</h3>
-              <p>En un teléfono compatible puedes abrir directamente la aplicación autenticadora.</p>
-              <a className="button button--primary mfa-deep-link" href={setupUri}>Abrir aplicación autenticadora</a>
-              <div className="mfa-secret-box">
-                <span>Clave de configuración manual</span>
-                <code>{sharedSecret || "No disponible"}</code>
-                <button className="button button--soft" type="button" onClick={copySecret} disabled={!sharedSecret}>
-                  {copied ? "Copiada" : "Copiar clave"}
-                </button>
+              <h3>Escanea el código QR</h3>
+              <p>En tu aplicación autenticadora, elige agregar una cuenta y escanea este código.</p>
+
+              <div className="mfa-qr-frame" aria-live="polite">
+                {qrDataUrl ? (
+                  <img
+                    className="mfa-qr-image"
+                    src={qrDataUrl}
+                    alt="Código QR para vincular la autenticación en dos pasos"
+                  />
+                ) : (
+                  <div className="mfa-qr-unavailable">
+                    No fue posible mostrar el QR. Utiliza una de las alternativas disponibles.
+                  </div>
+                )}
               </div>
-              <small>No compartas esta clave. Permite generar códigos de acceso para tu cuenta.</small>
+
+              {setupUri && (
+                <a className="button button--soft mfa-deep-link" href={setupUri}>
+                  Abrir en este dispositivo
+                </a>
+              )}
+
+              <small>
+                El QR contiene la configuración necesaria para vincular esta cuenta. No lo compartas.
+              </small>
             </section>
 
             <section className="mfa-setup-card">
@@ -139,6 +179,18 @@ export default function MfaSetupModal() {
               <div className="mfa-help-note">
                 El código cambia periódicamente. Utiliza el que esté visible al momento de confirmar.
               </div>
+
+              <details className="mfa-manual-details">
+                <summary>No puedo escanear el QR</summary>
+                <p>Ingresa esta clave manualmente en tu aplicación autenticadora.</p>
+                <div className="mfa-secret-box">
+                  <span>Clave de configuración manual</span>
+                  <code>{formattedSecret || "No disponible"}</code>
+                  <button className="button button--soft" type="button" onClick={copySecret} disabled={!sharedSecret}>
+                    {copied ? "Copiada" : "Copiar clave"}
+                  </button>
+                </div>
+              </details>
             </section>
           </div>
         )}
@@ -148,7 +200,7 @@ export default function MfaSetupModal() {
           <button className="button" type="button" onClick={closeSetup} disabled={busy}>Cancelar</button>
           {step === "intro" ? (
             <button className="button button--primary" type="button" onClick={start} disabled={busy}>
-              {busy ? "Preparando…" : "Comenzar configuración"}
+              {busy ? "Generando QR…" : "Generar código QR"}
             </button>
           ) : (
             <button className="button button--primary" type="button" onClick={verify} disabled={busy || code.length !== 6}>

@@ -7129,3 +7129,78 @@ kbd {
     max-width: none;
   }
 }
+
+/* QR de configuración MFA */
+.mfa-qr-card {
+  text-align: center;
+}
+.mfa-qr-card .eyebrow,
+.mfa-qr-card h3,
+.mfa-qr-card p,
+.mfa-qr-card > small {
+  text-align: left;
+}
+.mfa-qr-frame {
+  display: grid;
+  place-items: center;
+  min-height: 250px;
+  margin-top: 16px;
+  padding: 14px;
+  background:
+    linear-gradient(#fff, #fff) padding-box,
+    linear-gradient(135deg, #99f6e4, #bfdbfe) border-box;
+  border: 1px solid transparent;
+  border-radius: 14px;
+}
+.mfa-qr-image {
+  display: block;
+  width: min(100%, 260px);
+  height: auto;
+  aspect-ratio: 1;
+  background: #fff;
+  border-radius: 8px;
+}
+.mfa-qr-unavailable {
+  max-width: 240px;
+  color: #64748b;
+  font-size: 9.5px;
+  line-height: 1.55;
+  text-align: center;
+}
+.mfa-manual-details {
+  margin-top: 17px;
+  padding-top: 14px;
+  border-top: 1px solid #dce4ee;
+}
+.mfa-manual-details summary {
+  color: #0f766e;
+  cursor: pointer;
+  font-size: 9.5px;
+  font-weight: 800;
+  list-style-position: outside;
+}
+.mfa-manual-details > p {
+  margin-top: 10px;
+}
+.mfa-manual-details .mfa-secret-box {
+  grid-template-columns: 1fr;
+  margin-top: 10px;
+}
+.mfa-manual-details .mfa-secret-box code {
+  overflow-wrap: anywhere;
+  line-height: 1.65;
+  text-overflow: clip;
+  white-space: normal;
+}
+.mfa-manual-details .mfa-secret-box .button {
+  width: 100%;
+}
+
+@media (max-width: 760px) {
+  .mfa-qr-frame {
+    min-height: 220px;
+  }
+  .mfa-qr-image {
+    width: min(100%, 230px);
+  }
+}
