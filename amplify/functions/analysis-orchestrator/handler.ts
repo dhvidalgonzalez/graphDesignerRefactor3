@@ -87,6 +87,7 @@ type AnalysisRequestResult = {
   inputStorageKey?: string;
   resultStorageKey?: string;
   diagnosticsStorageKey?: string;
+  numericalStorageKey?: string;
 };
 
 type AnalysisArtifactTicket = {
@@ -1737,6 +1738,9 @@ function toRequestResult(
     ...(study.diagnosticsStorageKey
       ? { diagnosticsStorageKey: study.diagnosticsStorageKey }
       : {}),
+    ...(study.numericalStorageKey
+      ? { numericalStorageKey: study.numericalStorageKey }
+      : {}),
   };
 }
 
@@ -1997,7 +2001,9 @@ function artifactKeyForStudy(
         ? study.resultStorageKey
         : normalized === "DIAGNOSTICS"
           ? study.diagnosticsStorageKey
-          : null;
+          : normalized === "NUMERICAL"
+            ? study.numericalStorageKey
+            : null;
   const fileName =
     normalized === "INPUT"
       ? "input.json"
@@ -2005,7 +2011,9 @@ function artifactKeyForStudy(
         ? "result.json"
         : normalized === "DIAGNOSTICS"
           ? "diagnostics.json"
-          : null;
+          : normalized === "NUMERICAL"
+            ? "numerical.json"
+            : null;
   if (!fileName) throw new Error("ANALYSIS_ARTIFACT_NOT_SUPPORTED");
   if (!configured) throw new Error("ANALYSIS_ARTIFACT_NOT_AVAILABLE");
   const expected = `${base}/${fileName}`;
@@ -2027,7 +2035,7 @@ async function requestArtifact(
 
   const { normalized, key } = artifactKeyForStudy(study, args.artifactType);
   if (
-    (normalized === "RESULT" || normalized === "DIAGNOSTICS") &&
+    (normalized === "RESULT" || normalized === "DIAGNOSTICS" || normalized === "NUMERICAL") &&
     !TERMINAL_STATUSES.has(study.status)
   ) {
     throw new Error("ANALYSIS_STUDY_NOT_FINISHED");

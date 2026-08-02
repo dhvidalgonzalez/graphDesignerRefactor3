@@ -328,6 +328,7 @@ const schema = a
         inputStorageKey: a.string(),
         resultStorageKey: a.string(),
         diagnosticsStorageKey: a.string(),
+        numericalStorageKey: a.string(),
         engineName: a.string(),
         engineVersion: a.string(),
         requestedMemoryMb: a.integer(),
@@ -499,6 +500,7 @@ const schema = a
       inputStorageKey: a.string(),
       resultStorageKey: a.string(),
       diagnosticsStorageKey: a.string(),
+      numericalStorageKey: a.string(),
     }),
 
     AnalysisArtifactTicket: a.customType({

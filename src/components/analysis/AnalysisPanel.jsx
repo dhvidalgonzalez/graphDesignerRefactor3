@@ -1292,6 +1292,107 @@ function ResultsTab({ overlay, actions, activeDiagram, document }) {
   );
 }
 
+function NumericalExportTab({ overlay, document }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const study = overlay?.study;
+  const result = overlay?.result;
+  const isPowerFlow = String(study?.analysisType || result?.analysisType || "").toUpperCase() === "POWER_FLOW";
+  const available = Boolean(study?.numericalStorageKey);
+
+  const downloadNumericalData = async () => {
+    if (!study?.id || !available) return;
+    setBusy(true);
+    setError("");
+    try {
+      const loaded = await loadAnalysisArtifactTextService(study.id, "NUMERICAL");
+      const baseName = study.name || document?.name || "analisis";
+      downloadTextFile(
+        `${safeFilename(baseName)}-datos-numericos.json`,
+        loaded.text,
+      );
+    } catch (nextError) {
+      setError(nextError instanceof Error ? nextError.message : String(nextError));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!study || !result) {
+    return (
+      <div className="analysis-tab-content">
+        <section className="analysis-empty-result">
+          <strong>No hay un estudio activo</strong>
+          <span>Ejecuta o selecciona un flujo de carga para habilitar su exportación numérica.</span>
+        </section>
+      </div>
+    );
+  }
+
+  return (
+    <div className="analysis-tab-content">
+      <section className="analysis-section-card analysis-section-card--wide">
+        <span className="eyebrow">Exportación científica</span>
+        <h3>Datos numéricos del algoritmo</h3>
+        <p>
+          Descarga un JSON independiente del resultado visual. Las matrices se almacenan en
+          formato disperso CSR para conservar únicamente sus coeficientes no nulos.
+        </p>
+        <div className="read-only-grid">
+          <span>Estudio</span><strong>{study.name || analysisTypeLabel(study.analysisType)}</strong>
+          <span>Tipo</span><strong>{analysisTypeLabel(study.analysisType)}</strong>
+          <span>Estado</span><strong>{ANALYSIS_STATUS_LABELS[study.status] ?? study.status}</strong>
+          <span>Motor</span><strong>{result.engine?.solver || "pandapower"} {result.engine?.solverVersion || ""}</strong>
+        </div>
+        <div className="analysis-toolbar-row">
+          <button
+            className="button button--primary"
+            type="button"
+            disabled={busy || !available}
+            onClick={downloadNumericalData}
+          >
+            {busy ? "Preparando descarga…" : "Descargar datos numéricos"}
+          </button>
+        </div>
+        {error && <p className="analysis-phase-note analysis-phase-note--error">{error}</p>}
+        {!isPowerFlow && (
+          <p className="analysis-phase-note">
+            En esta etapa la exportación matricial se genera para el flujo de carga AC individual.
+          </p>
+        )}
+        {isPowerFlow && !available && (
+          <p className="analysis-phase-note">
+            Este estudio no contiene el nuevo artefacto numérico. Vuelve a ejecutarlo después de
+            desplegar el worker actualizado.
+          </p>
+        )}
+      </section>
+
+      <section className="analysis-section-card analysis-section-card--wide">
+        <h3>Contenido del archivo</h3>
+        <div className="analysis-model-list">
+          <div><span>Matrices de red</span><strong>Ybus, Yf e Yt</strong><code>CSR complejo</code></div>
+          <div><span>Newton-Raphson</span><strong>Jacobiano de la última iteración</strong><code>CSR real</code></div>
+          <div><span>Variables internas</span><strong>V, Sbus, ref, PV y PQ</strong><code>Vectores ordenados</code></div>
+          <div><span>Convergencia</span><strong>Desbalance final e iteraciones</strong><code>p.u.</code></div>
+          <div><span>Caso interno</span><strong>Tablas bus, generator y branch</strong><code>Índices pandapower</code></div>
+          <div><span>Trazabilidad</span><strong>Mapeo de barras y ramas</strong><code>IDs del diagrama</code></div>
+        </div>
+      </section>
+
+      <section className="analysis-section-card analysis-section-card--wide">
+        <h3>Reconstrucción de matrices</h3>
+        <p>
+          Cada matriz contiene <code>shape</code>, <code>dataReal</code>,
+          <code>dataImaginary</code> cuando corresponde, <code>indices</code> e
+          <code>indptr</code>. Esos campos permiten reconstruirla directamente como una matriz CSR
+          en Python, MATLAB u otra herramienta científica.
+        </p>
+      </section>
+    </div>
+  );
+}
+
 function AnalysisQuickPanel({
   validation,
   operatingCase,
@@ -1461,6 +1562,7 @@ export default function AnalysisPanel() {
   const tabs = [
     ["execute", "Ejecutar"],
     ["results", "Resultados"],
+    ["export", "Exportar"],
     ["labels", "Etiquetas"],
     ["overview", "Preparación"],
     ["cases", "Casos"],
@@ -1520,6 +1622,7 @@ export default function AnalysisPanel() {
                 />
               )}
               {tab === "results" && <ResultsTab overlay={editorData.analysisOverlay} actions={editorActions} activeDiagram={activeDiagram} document={document} />}
+              {tab === "export" && <NumericalExportTab overlay={editorData.analysisOverlay} document={document} />}
               {tab === "labels" && <LabelsTab overlay={editorData.analysisOverlay} actions={editorActions} />}
               {tab === "overview" && (
                 <OverviewTab
